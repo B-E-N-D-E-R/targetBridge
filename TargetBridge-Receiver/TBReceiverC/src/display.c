@@ -21,7 +21,7 @@
 #include <string.h>
 
 #ifndef TB_RECEIVER_VERSION
-#define TB_RECEIVER_VERSION "3.2.0"
+#define TB_RECEIVER_VERSION "3.5.2"
 #endif
 
 #ifndef TB_RECEIVER_BUILD
@@ -40,9 +40,7 @@ struct tb_display {
     int           is_connecting;
     int           input_capture_active;
     int           input_intercept_active;
-    struct tb_input_event input_events[128];
-    int           input_head;
-    int           input_tail;
+    struct tb_input_queue input_queue;
     uint32_t      last_target_switch_tick;
     uint32_t      last_space_switch_tick;
     uint32_t      last_space_gesture_tick;
@@ -51,6 +49,7 @@ struct tb_display {
     int           cursor_source_w, cursor_source_h;
     int           cursor_visible;
     int           cursor_type;
+    int           cursor_large;
     uint32_t      last_video_frame_time;
     int           system_cursor_hidden;
 
@@ -182,12 +181,7 @@ static uint16_t tb_disp_mac_keycode_for_sdl_scancode(SDL_Scancode scancode) {
 
 static void tb_disp_queue_input_event(struct tb_display *d, const struct tb_input_event *event) {
     if (!d || !event) return;
-    int next = (d->input_head + 1) % 128;
-    if (next == d->input_tail) {
-        d->input_tail = (d->input_tail + 1) % 128;
-    }
-    d->input_events[d->input_head] = *event;
-    d->input_head = next;
+    (void)tb_input_queue_push(&d->input_queue, event);
 }
 
 static void tb_disp_destroy_status_texture(struct tb_display *d) {
@@ -496,13 +490,17 @@ static void tb_disp_rebuild_status_texture(struct tb_display *d,
 static void tb_disp_refresh_window_mode(struct tb_display *d) {
     if (!d || !d->win) return;
 
-    if ((d->is_connected || d->is_connecting) && d->preferred_fullscreen) {
+    const int monitor_shield_active =
+        (d->is_connected || d->is_connecting) && d->preferred_fullscreen;
+
+    if (monitor_shield_active) {
         SDL_SetWindowFullscreen(d->win, SDL_WINDOW_FULLSCREEN_DESKTOP);
     } else {
         SDL_SetWindowFullscreen(d->win, 0);
         SDL_SetWindowSize(d->win, 980, 620);
         SDL_SetWindowPosition(d->win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
+    tb_receiver_set_monitor_shield(monitor_shield_active);
 
     const int should_hide_cursor =
         ((d->is_connected || d->is_connecting) && d->preferred_fullscreen) ||
@@ -746,7 +744,9 @@ static void tb_disp_draw_cursor(struct tb_display *d) {
     const double sy = (double)out_h / (double)d->cursor_source_h;
     const int x = (int)((double)d->cursor_x * sx);
     const int y = (int)((double)d->cursor_y * sy);
-    const int size = out_w >= 5000 ? 58 : 44;
+    const int size = d->cursor_large
+        ? (out_w >= 5000 ? 58 : 44)
+        : (out_w >= 5000 ? 32 : 24);
     SDL_BlendMode old_blend = SDL_BLENDMODE_NONE;
     (void)SDL_GetRenderDrawBlendMode(d->ren, &old_blend);
 
@@ -1143,7 +1143,8 @@ void tb_disp_set_cursor(struct tb_display *d,
                         int x, int y,
                         int source_w, int source_h,
                         int visible,
-                        int type) {
+                        int type,
+                        int large) {
     if (!d) return;
     d->cursor_x = x;
     d->cursor_y = y;
@@ -1151,6 +1152,7 @@ void tb_disp_set_cursor(struct tb_display *d,
     d->cursor_source_h = source_h > 0 ? source_h : 1;
     d->cursor_visible = visible;
     d->cursor_type = type;
+    d->cursor_large = large;
 
     uint32_t now = SDL_GetTicks();
     if (now - d->last_video_frame_time > 40) {
@@ -1240,12 +1242,14 @@ unsigned int tb_disp_poll_actions(struct tb_display *d) {
                 if (ev.button.button == SDL_BUTTON_LEFT) input_event.kind = TB_INPUT_EVENT_LEFT_DOWN;
                 else if (ev.button.button == SDL_BUTTON_RIGHT) input_event.kind = TB_INPUT_EVENT_RIGHT_DOWN;
                 else input_event.kind = TB_INPUT_EVENT_OTHER_DOWN;
+                input_event.click_count = ev.button.clicks;
                 tb_disp_queue_input_event(d, &input_event);
                 break;
             case SDL_MOUSEBUTTONUP:
                 if (ev.button.button == SDL_BUTTON_LEFT) input_event.kind = TB_INPUT_EVENT_LEFT_UP;
                 else if (ev.button.button == SDL_BUTTON_RIGHT) input_event.kind = TB_INPUT_EVENT_RIGHT_UP;
                 else input_event.kind = TB_INPUT_EVENT_OTHER_UP;
+                input_event.click_count = ev.button.clicks;
                 tb_disp_queue_input_event(d, &input_event);
                 break;
             case SDL_KEYDOWN:
@@ -1307,10 +1311,7 @@ unsigned int tb_disp_poll_actions(struct tb_display *d) {
 
 int tb_disp_pop_input_event(struct tb_display *d, struct tb_input_event *out) {
     if (!d || !out) return 0;
-    if (d->input_tail == d->input_head) return 0;
-    *out = d->input_events[d->input_tail];
-    d->input_tail = (d->input_tail + 1) % 128;
-    return 1;
+    return tb_input_queue_pop(&d->input_queue, out);
 }
 
 int tb_disp_get_info(struct tb_display *d, struct tb_display_info *info) {
@@ -1323,8 +1324,10 @@ int tb_disp_get_info(struct tb_display *d, struct tb_display_info *info) {
 
     SDL_DisplayMode mode;
     if (SDL_GetCurrentDisplayMode(display_index, &mode) == 0) {
-        info->active_w = (uint32_t)mode.w;
-        info->active_h = (uint32_t)mode.h;
+        info->logical_w = (uint32_t)mode.w;
+        info->logical_h = (uint32_t)mode.h;
+        info->active_w = info->logical_w;
+        info->active_h = info->logical_h;
     }
 
     int window_w = 0, window_h = 0;
@@ -1335,12 +1338,17 @@ int tb_disp_get_info(struct tb_display *d, struct tb_display_info *info) {
         info->drawable_h = (uint32_t)drawable_h;
     }
 
-    /* On Retina/5K macOS displays SDL_GetCurrentDisplayMode may report the
-     * logical desktop size (for example 2560x1440) while the renderer
-     * drawable exposes the true backing pixel size (for example 5120x2880).
-     * For the TB stream UI we want the actual panel pixel size. */
-    if (info->drawable_w > info->active_w) info->active_w = info->drawable_w;
-    if (info->drawable_h > info->active_h) info->active_h = info->drawable_h;
+    /* SDL reports a logical desktop mode on Retina displays. Query the
+     * receiver window's NSScreen for native pixels instead of using its
+     * transient drawable, which is only window-sized before fullscreen. */
+    uint32_t native_w = 0, native_h = 0;
+    if (tb_receiver_content_display_pixels(&native_w, &native_h) == 0) {
+        info->active_w = native_w;
+        info->active_h = native_h;
+    } else {
+        if (info->drawable_w > info->active_w) info->active_w = info->drawable_w;
+        if (info->drawable_h > info->active_h) info->active_h = info->drawable_h;
+    }
 
     info->window_w = (uint32_t)window_w;
     info->window_h = (uint32_t)window_h;

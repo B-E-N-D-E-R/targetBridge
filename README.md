@@ -21,10 +21,44 @@ contributions help keep the project moving forward.
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/swellweb)
 
-## TargetBridge 3.3
+## Contributors
 
-TargetBridge 3.3 improves the reliability of the display connection while
-keeping the established multi-Mac workspace features:
+Thank you to everyone who tests TargetBridge on real hardware, reports issues,
+and improves the project. A special thank-you for this release goes to:
+
+- [@aalpgiray](https://github.com/aalpgiray) for receiver brightness, volume, Night Shift, and True Tone controls.
+- [@preggocl](https://github.com/preggocl) for the physical Receiver display profile and the software decode fallback.
+- [@Betafer](https://github.com/Betafer) for input-queue safety, cursor work, idle audio/display handling, watchdog protection, monitor shielding, and build improvements.
+
+## TargetBridge 3.5.2
+
+TargetBridge 3.5.2 is a focused maintenance update to the Input Dockstation.
+When the Receiver is the input master, Shift and Command now remain active for
+multi-file selection even when the keyboard is connected to the Receiver and
+the mouse or trackpad is used locally on the Sender. This fixes Finder range
+selection and non-contiguous selection without changing ordinary local input.
+
+It also includes the video queue, capture-health and permission-status fixes
+prepared for this maintenance line. For the wider 3.5.1 maintenance work,
+including Receiver display profiles, idle resource handling, and compatibility
+with older Macs:
+
+- preserve keyboard and mouse release events when the Receiver input queue is under pressure
+- preserve native macOS cursor shapes by default, including the screenshot crosshair; the custom overlay is reserved for the explicit large-cursor option
+- advertise the Receiver's actual panel geometry instead of always reporting a fixed 5K profile
+- preserve native 5K panel dimensions when macOS uses a scaled HiDPI desktop
+- fall back safely to software video decode when VideoToolbox cannot decode a stream on older hardware
+- allow display sleep while the Receiver is waiting, including before the first session
+- open audio output only when audio arrives and release it when the session ends
+- handle watchdog clock underflow without incorrectly dropping the connection
+- keep local notification banners behind the active monitor surface across display/fullscreen transitions
+- package SDL runtimes safely and support explicit build/version overrides
+
+See the [full 3.5.2 release notes](docs/releases/3.5.2.md), the
+[3.5.1 release notes](docs/releases/3.5.1.md), and the
+[testing guide](docs/Testing.md), including the new monitor-shield lifecycle test.
+
+It also keeps the established multi-Mac workspace features:
 
 - mirror mode and extended desktop mode
 - multiple receivers from one sender
@@ -54,8 +88,9 @@ keeping the established multi-Mac workspace features:
 - Network Link (experimental): [docs/Features.md#network-link-experimental](docs/Features.md#network-link-experimental)
 - Audio Relay: [docs/Features.md#audio-relay](docs/Features.md#audio-relay)
 - Input Dockstation, clipboard sync, master/slave roles, and Receiver Master shortcuts: [docs/Features.md#input-dockstation](docs/Features.md#input-dockstation)
-- Remote brightness control: [docs/Features.md#remote-brightness-control](docs/Features.md#remote-brightness-control)
+- Receiver device controls (brightness, volume, Night Shift, True Tone): [docs/Features.md#receiver-device-controls](docs/Features.md#receiver-device-controls)
 - Remote connection & automation (URL scheme, launch args, SSH, login/wake): [docs/Automation.md](docs/Automation.md)
+- Measured connection-path selection (Thunderbolt, USB/USB4, Ethernet, Wi-Fi): [docs/Automation.md#1-targetbridge-cli](docs/Automation.md#1-targetbridge-cli)
 - Shared translations (English, Italian, German, French, and Chinese): [docs/Features.md#shared-translations](docs/Features.md#shared-translations)
 - Thunderbolt networking extras (SSH/SFTP, file sharing, Internet Sharing): [docs/Features.md#thunderbolt-networking-extras](docs/Features.md#thunderbolt-networking-extras)
 
@@ -66,6 +101,7 @@ keeping the established multi-Mac workspace features:
 - Stream profiles range from `2560 x 1440` to `5120 x 2880` with H.264/HEVC selection based on capability. `5K 60` is an experimental profile for recent Apple Silicon; `5K 48` remains recommended for reliable daily work. See [Display Modes](docs/Features.md#display-modes).
 - Receiver discovery is automatic over Bonjour. Extended-display arrangement is remembered per receiver when possible. See [Display Modes](docs/Features.md#display-modes).
 - Thunderbolt Bridge remains the primary low-latency path, with `Network Link` available as an experimental addon-gated transport. See [Network Link](docs/Features.md#network-link-experimental).
+- The Sender menu can control a connected receiver's brightness, volume, Night Shift, and True Tone when supported. See [Receiver Device Controls](docs/Features.md#receiver-device-controls).
 
 ## Official Addons
 
@@ -77,7 +113,7 @@ TargetBridge now has a conservative manifest-based addon system. Official manife
 
 ## Requirements
 
-- Sender: Apple Silicon Mac (M1 or later), macOS 14 Sonoma or later
+- Sender: Apple Silicon Mac (M1 or later) or Intel Mac, macOS 14 Sonoma or later. Apple Silicon remains the primary tested path; Intel Sender builds are available for broader testing.
 - Receiver: Intel or Apple Silicon Mac, macOS 11 Big Sur or later
 - Thunderbolt cable
 - See also [docs/Hardware.md](docs/Hardware.md) for hardware details, tested cables, adapters, and Thunderbolt networking ideas.
@@ -87,6 +123,7 @@ TargetBridge now has a conservative manifest-based addon system. Official manife
 **[→ Download latest release (pre-built apps, no Xcode needed)](https://github.com/swellweb/targetBridge/releases/latest)**
 
 - `TargetBridge-arm64.app.zip` — Sender (for Apple Silicon Macs)
+- `TargetBridge-x86_64.app.zip` — Sender (for Intel Macs)
 - `TargetBridge-Receiver-arm64.app.zip` — Apple Silicon Receiver (use machine as monitor for sender)
 - `TargetBridge-Receiver-x86_64.app.zip` — Intel Receiver (use machine as monitor for sender)
 
