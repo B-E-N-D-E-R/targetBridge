@@ -1,0 +1,122 @@
+name: Receiver for macOS 10.15 Catalina
+
+# Builds an Intel Receiver that launches on macOS 10.15.7. FFmpeg and SDL2 are
+# compiled from source for the 10.15 deployment target and linked statically,
+# because Homebrew bottles only run on the macOS release they were built for.
+#
+# Run it from the Actions tab (workflow_dispatch) and download the artifact,
+# or push a tag such as `catalina-v3.5.2` to publish a draft release.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, catalina-receiver ]
+    tags: [ 'catalina-v*' ]
+  pull_request:
+    paths:
+      - 'TargetBridge-Receiver/**'
+      - 'TargetBridge-Shared/**'
+      - '.github/workflows/receiver-catalina.yml'
+
+permissions:
+  contents: write
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: '10.15'
+
+jobs:
+  build-receiver-catalina:
+    name: Build Receiver (macOS 10.15, x86_64)
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Install Build Tools
+        run: brew install cmake nasm pkgconf dylibbundler jq
+
+      - name: Restore Legacy Dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: legacy-deps
+          key: legacy-deps-${{ runner.os }}-x86_64-10.15-${{ hashFiles('TargetBridge-Receiver/scripts/build_legacy_deps.sh') }}
+
+      - name: Build FFmpeg and SDL2 for macOS 10.15
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: ./TargetBridge-Receiver/scripts/build_legacy_deps.sh "$GITHUB_WORKSPACE/legacy-deps"
+
+      - name: Check Localizations
+        run: ./TargetBridge-Shared/scripts/check_localizations.sh
+
+      - name: Run Receiver Unit Tests
+        run: |
+          cd TargetBridge-Receiver/TBReceiverC
+          make test
+
+      - name: Build Receiver App
+        env:
+          PKG: pkgconf --static
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/legacy-deps/lib/pkgconfig
+          CFLAGS: -Werror=unguarded-availability-new
+        run: |
+          set -o pipefail
+          cd TargetBridge-Receiver
+          ./scripts/build_tbreceiver_c_app.sh 2>&1 | tee "$RUNNER_TEMP/receiver-build.log"
+          # ld only warns when a linked object targets a newer macOS; on
+          # Catalina that object would fail at launch, so treat it as an error.
+          if grep -q "built for newer macOS version" "$RUNNER_TEMP/receiver-build.log"; then
+            echo "::error::An object in the link targets a newer macOS than 10.15"
+            exit 1
+          fi
+
+      - name: Verify Catalina Compatibility
+        run: |
+          APP="build/TargetBridge Receiver.app"
+          BIN="$APP/Contents/MacOS/TargetBridgeReceiver"
+          file "$BIN" | grep -q x86_64
+
+          MINOS="$(otool -l "$BIN" | awk '/cmd LC_BUILD_VERSION/{f=1} f && $1=="minos"{print $2; exit}')"
+          echo "Executable minos: $MINOS"
+          if [[ "$MINOS" != "10.15" ]]; then
+            echo "::error::Executable targets macOS $MINOS, expected 10.15"
+            exit 1
+          fi
+
+          PLIST_MIN="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")"
+          echo "LSMinimumSystemVersion: $PLIST_MIN"
+          [[ "$PLIST_MIN" == "10.15" ]]
+
+          # Only OS libraries may be loaded at runtime; FFmpeg and SDL2 are static.
+          echo "Linked libraries:"
+          otool -L "$BIN" | tail -n +2
+          NON_SYSTEM="$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' | grep -Ev '^/(usr/lib|System/Library)/' || true)"
+          if [[ -n "$NON_SYSTEM" ]]; then
+            echo "::error::Unexpected non-system libraries: $NON_SYSTEM"
+            exit 1
+          fi
+
+      - name: Check Receiver Permission Probe
+        run: ruby TargetBridge-Sender/scripts/test_permission_status.rb receiver 'build/TargetBridge Receiver.app/Contents/MacOS/TargetBridgeReceiver'
+
+      - name: Zip App Bundle
+        run: |
+          cd build
+          ditto -c -k --keepParent "TargetBridge Receiver.app" TargetBridge-Receiver-catalina-x86_64.app.zip
+
+      - name: Upload Receiver Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: TargetBridge-Receiver-catalina-x86_64.app.zip
+          path: build/TargetBridge-Receiver-catalina-x86_64.app.zip
+
+      - name: Create Draft Release
+        if: startsWith(github.ref, 'refs/tags/catalina-v')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            build/TargetBridge-Receiver-catalina-x86_64.app.zip \
+            --title "TargetBridge Receiver for Catalina ${{ github.ref_name }}" \
+            --notes "Intel Receiver built for macOS 10.15 Catalina. Pair it with the upstream TargetBridge Sender (macOS 14+) on the other Mac." \
+            --draft

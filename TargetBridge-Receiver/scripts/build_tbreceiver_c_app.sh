@@ -11,6 +11,7 @@ APP_NAME="TargetBridge Receiver"
 APP_VERSION="${APP_VERSION:-3.5.2}"
 STAMP="${APP_BUILD:-$(date +%Y%m%d%H%M%S)}"
 ARCH="$(uname -m)"
+MIN_MACOS="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 ICONSET_DIR="$(mktemp -d)"
 ICON_FILE="${ROOT}/TargetBridgeAssets/Assets.xcassets/AppIcon.appiconset/icon_1024.png"
 ICNS_PATH="${APP_DIR}/Contents/Resources/TargetBridgeReceiver.icns"
@@ -100,7 +101,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
     <key>CFBundleVersion</key>
     <string>$STAMP</string>
     <key>LSMinimumSystemVersion</key>
-    <string>11.0</string>
+    <string>${MIN_MACOS}</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
@@ -137,3 +138,4 @@ rm -rf "$ICONSET_DIR"
 echo "${APP_NAME} built: $APP_DIR"
 echo "Version: ${APP_VERSION} ($STAMP)"
 echo "Build architecture: $ARCH"
+echo "Minimum macOS: $MIN_MACOS"
