@@ -84,7 +84,8 @@ git clone --quiet --depth 1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFm
     --extra-ldflags="$TARGET_FLAGS"
 
   for flag in CONFIG_VIDEOTOOLBOX HAVE_PTHREADS CONFIG_H264_VIDEOTOOLBOX_HWACCEL CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL; do
-    if ! grep -q "#define ${flag} 1" config.h; then
+    # Component switches (hwaccels, decoders) live in config_components.h.
+    if ! grep -q "#define ${flag} 1" config.h config_components.h; then
       echo "FFmpeg configure did not enable ${flag}" >&2
       exit 1
     fi
