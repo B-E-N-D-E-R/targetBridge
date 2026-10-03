@@ -122,8 +122,8 @@ TargetBridge now has a conservative manifest-based addon system. Official manife
 
 - Sender: Apple Silicon Mac (M1 or later) or Intel Mac, macOS 14 Sonoma or later. Apple Silicon remains the primary tested path; Intel Sender builds are available for broader testing.
 - Receiver: Intel or Apple Silicon Mac, macOS 11 Big Sur or later
-  - macOS 10.15 Catalina (Intel): use the Catalina Receiver build, see [docs/Catalina.md](docs/Catalina.md)
-- Thunderbolt cable
+  - macOS 10.15 Catalina (Intel): use this fork's Catalina Receiver build, see [docs/Catalina.md](docs/Catalina.md)
+- Connection: Thunderbolt, an Ethernet cable (direct or through a router), or a USB cable that macOS turns into a network link; see [docs/Catalina.md#connecting-the-macs](docs/Catalina.md#connecting-the-macs)
 - See also [docs/Hardware.md](docs/Hardware.md) for hardware details, tested cables, adapters, and Thunderbolt networking ideas.
 
 ## Download

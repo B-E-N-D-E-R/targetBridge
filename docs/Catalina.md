@@ -6,8 +6,8 @@ macOS 11 was the build: the release links Homebrew's FFmpeg and SDL2, which are
 compiled for the macOS release of the CI runner, and the Info.plist declared
 `LSMinimumSystemVersion` 11.0.
 
-The `Receiver for macOS 10.15 Catalina` workflow
-(`.github/workflows/receiver-catalina.yml`) fixes that by:
+The `Catalina Fork Build` workflow (`.github/workflows/catalina-fork.yml`)
+fixes that by:
 
 1. building a decode-only FFmpeg (H.264/HEVC + VideoToolbox) and SDL2 from
    source with `MACOSX_DEPLOYMENT_TARGET=10.15`, as static libraries
@@ -20,11 +20,16 @@ The `Receiver for macOS 10.15 Catalina` workflow
 4. checking the executable's `minos`, the Info.plist minimum, and the linked
    libraries before uploading `TargetBridge-Receiver-catalina-x86_64.app.zip`.
 
-## Getting the app
+The same workflow also builds this fork's Sender (`TargetBridge-arm64.app.zip`
+and `TargetBridge-x86_64.app.zip`), which has Ethernet / USB built in. See
+[Connecting the Macs](#connecting-the-macs).
 
-- Actions tab → **Receiver for macOS 10.15 Catalina** → **Run workflow**, then
-  download the artifact from the finished run; or
-- push a tag named `catalina-v<version>` to get a draft release.
+## Getting the apps
+
+- Actions tab → **Catalina Fork Build** → **Run workflow**, then download the
+  artifacts from the finished run; or
+- push a tag named `catalina-v<version>` to get a draft release with all three
+  zips.
 
 On the iMac, unzip, then clear the quarantine flag before the first launch:
 
@@ -32,13 +37,41 @@ On the iMac, unzip, then clear the quarantine flag before the first launch:
 xattr -cr ~/Downloads/"TargetBridge Receiver.app"
 ```
 
-## Pairing
+## Connecting the Macs
 
-Only the Receiver changes. The Sender is the unmodified TargetBridge app and
-still needs macOS 14 Sonoma or later on the Mac that drives the iMac. Connect
-the two with a Thunderbolt cable (Thunderbolt 2 iMacs need Apple's Thunderbolt
-3 to Thunderbolt 2 adapter) and both Macs get a Thunderbolt Bridge interface,
-which Catalina supports.
+The Sender still needs macOS 14 Sonoma or later on the Mac that drives the
+iMac; use this fork's Sender build. In the Sender, pick the transport for the
+session:
+
+| Cable | Transport | Notes |
+| --- | --- | --- |
+| Thunderbolt (Thunderbolt 2 iMacs need Apple's Thunderbolt 3 to Thunderbolt 2 adapter) | Thunderbolt Bridge | Lowest latency. |
+| Ethernet cable straight between the Macs | Ethernet / USB | Both Macs self-assign a `169.254.x.x` address. Newer Macs need a USB-C Ethernet adapter. |
+| Both Macs on the same router or switch | Ethernet / USB | Uses the LAN addresses. Wired is much steadier than Wi-Fi. |
+| USB-C (newer Mac) to USB-A (iMac) data cable | Ethernet / USB | See below. |
+
+Ethernet / USB is built into this fork's Sender; it is no longer the
+experimental `Network Link` add-on and cannot be switched off. When a direct
+cable is plugged in, the Sender lists that interface (`enX · 169.254.x.x`)
+first and dials the Receiver's matching link-local address.
+
+### USB-C to USB-A
+
+TargetBridge does not drive USB itself; it streams over whatever network
+interface macOS creates. A USB cable works only if, once plugged in, a new
+network interface with a `169.254.x.x` address appears in System Preferences →
+Network on **both** Macs (the Receiver shows it as its `USB` address). If one
+appears, select Ethernet / USB and that interface in the Sender. If none
+appears, macOS is not networking over that USB connection and you need
+Ethernet or Thunderbolt instead.
+
+If you try this, use a 10 Gbps data cable (USB 3.1/3.2 Gen 2), not a charging
+cable. The 2012–2015 iMacs' USB-A ports are USB 3.0, so expect at most about
+3 Gbps of real throughput. That is enough for 2560×1440.
+
+The Sender's `targetbridge connect --path auto` measures every working route
+(Thunderbolt, direct USB/Ethernet, LAN, Wi-Fi) and picks the fastest; see
+[Automation](Automation.md#1-targetbridge-cli).
 
 ## Expectations on 2012–2013 iMacs
 

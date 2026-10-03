@@ -5,6 +5,10 @@ import Foundation
 final class TBAddonStore: ObservableObject {
     static let shared = TBAddonStore()
     private static let overridesDefaultsKey = "fd.tbdisplaysender.addonEnabledOverrides"
+    /// Capabilities that are part of the app itself rather than optional addons.
+    /// Manifests that only provide these are hidden, including copies an older
+    /// build mirrored into Application Support.
+    static let builtInCapabilities: Set<TBAddonCapability> = [.networkLink]
 
     @Published private(set) var addons: [TBAddonRecord] = []
 
@@ -42,7 +46,10 @@ final class TBAddonStore: ObservableObject {
             merged[record.id] = record
         }
 
-        addons = merged.values.sorted {
+        addons = merged.values.filter { record in
+            let capabilities = Set(record.manifest.capabilities)
+            return capabilities.isEmpty || !capabilities.isSubset(of: Self.builtInCapabilities)
+        }.sorted {
             if $0.origin == $1.origin {
                 return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
@@ -62,6 +69,7 @@ final class TBAddonStore: ObservableObject {
     }
 
     func isCapabilityEnabled(_ capability: TBAddonCapability) -> Bool {
+        if Self.builtInCapabilities.contains(capability) { return true }
         addons.contains { addon in
             isEnabled(addon) && addon.manifest.capabilities.contains(capability) && isCompatible(addon)
         }

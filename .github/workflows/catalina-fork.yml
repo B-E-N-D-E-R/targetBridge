@@ -1,10 +1,12 @@
-name: Receiver for macOS 10.15 Catalina
+name: Catalina Fork Build
 
-# Builds an Intel Receiver that launches on macOS 10.15.7. FFmpeg and SDL2 are
-# compiled from source for the 10.15 deployment target and linked statically,
-# because Homebrew bottles only run on the macOS release they were built for.
+# Builds this fork's two apps:
+# - an Intel Receiver that launches on macOS 10.15.7. FFmpeg and SDL2 are
+#   compiled from source for the 10.15 deployment target and linked statically,
+#   because Homebrew bottles only run on the macOS release they were built for;
+# - the Sender (macOS 14+), with the built-in Ethernet / USB transport.
 #
-# Run it from the Actions tab (workflow_dispatch) and download the artifact,
+# Run it from the Actions tab (workflow_dispatch) and download the artifacts,
 # or push a tag such as `catalina-v3.5.2` to publish a draft release.
 
 on:
@@ -16,18 +18,60 @@ on:
     paths:
       - 'TargetBridge-Receiver/**'
       - 'TargetBridge-Shared/**'
-      - '.github/workflows/receiver-catalina.yml'
+      - 'TargetBridge-Sender/**'
+      - '.github/workflows/catalina-fork.yml'
 
 permissions:
   contents: write
 
-env:
-  MACOSX_DEPLOYMENT_TARGET: '10.15'
-
 jobs:
+  build-sender:
+    name: Build Sender (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - os: macos-15-intel
+            arch: x86_64
+          - os: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Install Tools
+        run: brew install jq xcodegen
+
+      - name: Build Sender App
+        run: |
+          cd TargetBridge-Sender
+          ./scripts/build_targetbridge_sender_app.sh
+          file ../build/TargetBridge.app/Contents/MacOS/TargetBridge | grep -q "${{ matrix.arch }}"
+
+      - name: Run Sender Unit Tests
+        run: |
+          cd TargetBridge-Sender
+          xcodebuild test -project TargetBridge.xcodeproj -scheme TBDisplaySender -destination 'platform=macOS' -derivedDataPath .build/DerivedData
+
+      - name: Check Sender Permission Probe
+        run: ruby TargetBridge-Sender/scripts/test_permission_status.rb sender build/TargetBridge.app/Contents/MacOS/TargetBridge
+
+      - name: Zip App Bundle
+        run: |
+          cd build
+          ditto -c -k --keepParent TargetBridge.app TargetBridge-${{ matrix.arch }}.app.zip
+
+      - name: Upload Sender Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: TargetBridge-${{ matrix.arch }}.app.zip
+          path: build/TargetBridge-${{ matrix.arch }}.app.zip
+
   build-receiver-catalina:
     name: Build Receiver (macOS 10.15, x86_64)
     runs-on: macos-15-intel
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '10.15'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
@@ -110,13 +154,27 @@ jobs:
           name: TargetBridge-Receiver-catalina-x86_64.app.zip
           path: build/TargetBridge-Receiver-catalina-x86_64.app.zip
 
+  publish-release:
+    name: Publish Draft Release
+    if: startsWith(github.ref, 'refs/tags/catalina-v')
+    needs: [build-sender, build-receiver-catalina]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
       - name: Create Draft Release
-        if: startsWith(github.ref, 'refs/tags/catalina-v')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            build/TargetBridge-Receiver-catalina-x86_64.app.zip \
-            --title "TargetBridge Receiver for Catalina ${{ github.ref_name }}" \
-            --notes "Intel Receiver built for macOS 10.15 Catalina. Pair it with the upstream TargetBridge Sender (macOS 14+) on the other Mac." \
+            --repo "${{ github.repository }}" \
+            artifacts/TargetBridge-Receiver-catalina-x86_64.app.zip \
+            artifacts/TargetBridge-arm64.app.zip \
+            artifacts/TargetBridge-x86_64.app.zip \
+            --title "TargetBridge Catalina fork ${{ github.ref_name }}" \
+            --notes "Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport." \
             --draft

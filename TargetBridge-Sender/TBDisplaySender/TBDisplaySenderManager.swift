@@ -17,11 +17,11 @@ enum TBTransportKind: String, CaseIterable, Identifiable {
         case (.thunderboltBridge, .german): return "Thunderbolt Bridge"
         case (.thunderboltBridge, .french): return "Thunderbolt Bridge"
         case (.thunderboltBridge, .chinese): return "Thunderbolt Bridge"
-        case (.networkLink, .italian): return "Network Link (sperimentale)"
-        case (.networkLink, .english): return "Network Link (experimental)"
-        case (.networkLink, .german): return "Network Link (experimentell)"
-        case (.networkLink, .french): return "Network Link (expérimental)"
-        case (.networkLink, .chinese): return "Network Link（实验性）"
+        case (.networkLink, .italian): return "Ethernet / USB"
+        case (.networkLink, .english): return "Ethernet / USB"
+        case (.networkLink, .german): return "Ethernet / USB"
+        case (.networkLink, .french): return "Ethernet / USB"
+        case (.networkLink, .chinese): return "以太网 / USB"
         }
     }
 }
@@ -474,13 +474,13 @@ final class TBDisplaySenderService: ObservableObject {
     }
 
     func applyDiscoveredReceiver(_ receiver: TBDiscoveredReceiver, to session: TBDisplaySenderSession) {
-        session.receiverIP = receiver.ip(for: session.transportKind)
-        session.receiverSupportsHEVCDecodeHint = receiver.supportsHEVCDecode
         if session.localInterfaceIP.isEmpty {
             session.localInterfaceIP = suggestedInterfaceForNewSession(transportKind: session.transportKind)?.ip
                 ?? availableInterfaces(for: session.transportKind).first?.ip
                 ?? ""
         }
+        session.receiverIP = receiver.ip(for: session.transportKind, localInterfaceIP: session.localInterfaceIP)
+        session.receiverSupportsHEVCDecodeHint = receiver.supportsHEVCDecode
         restoreDisplayProfile(for: session)
         objectWillChange.send()
     }
@@ -503,7 +503,7 @@ final class TBDisplaySenderService: ObservableObject {
             }
 
             session.selectedReceiverID = receiver.id
-            session.receiverIP = receiver.ip(for: session.transportKind)
+            session.receiverIP = receiver.ip(for: session.transportKind, localInterfaceIP: session.localInterfaceIP)
             session.receiverSupportsHEVCDecodeHint = receiver.supportsHEVCDecode
         }
     }
@@ -571,8 +571,16 @@ final class TBDisplaySenderService: ObservableObject {
     func transportDidChange(for session: TBDisplaySenderSession) {
         session.localInterfaceIP = defaultLocalInterfaceIP(for: session.transportKind)
         if let receiver = discoveredReceivers.first(where: { $0.id == session.selectedReceiverID }) {
-            session.receiverIP = receiver.ip(for: session.transportKind)
+            session.receiverIP = receiver.ip(for: session.transportKind, localInterfaceIP: session.localInterfaceIP)
         }
+        objectWillChange.send()
+    }
+
+    func localInterfaceDidChange(for session: TBDisplaySenderSession) {
+        guard !session.isConnected, !session.isStreaming,
+              let receiver = discoveredReceivers.first(where: { $0.id == session.selectedReceiverID })
+        else { return }
+        session.receiverIP = receiver.ip(for: session.transportKind, localInterfaceIP: session.localInterfaceIP)
         objectWillChange.send()
     }
 
@@ -862,6 +870,13 @@ final class TBDisplaySenderService: ObservableObject {
                 continue
             }
 
+            // A direct Ethernet cable or Mac-to-Mac USB cable has no DHCP server,
+            // so both ends self-assign 169.254.x.x on an enX interface.
+            if TBConnectionDiagnostics.isDirectLinkInterface(name: name, ip: ip) {
+                interfaces.append(TBLocalLinkInterface(name: name, ip: ip, transportKind: .networkLink))
+                continue
+            }
+
             guard isLikelyLocalNetworkInterfaceName(name),
                   isLikelyLANIPv4(ip)
             else { continue }
@@ -870,6 +885,12 @@ final class TBDisplaySenderService: ObservableObject {
         }
 
         return interfaces.sorted {
+            if $0.transportKind == $1.transportKind {
+                // Suggest a direct cable before a shared LAN or Wi-Fi network.
+                let lhsDirect = $0.ip.hasPrefix("169.254.")
+                let rhsDirect = $1.ip.hasPrefix("169.254.")
+                if lhsDirect != rhsDirect { return lhsDirect }
+            }
             if $0.transportKind == $1.transportKind, $0.name == $1.name {
                 return $0.ip < $1.ip
             }

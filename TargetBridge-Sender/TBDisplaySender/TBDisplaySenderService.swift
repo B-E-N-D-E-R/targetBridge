@@ -1479,6 +1479,12 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         // Bridge peer leaves via the wrong link and times out.
         let interfaces = TBConnectionDiagnostics.currentIPv4Interfaces()
         connectInterfaceName = TBConnectionDiagnostics.interfaceName(forLocalIP: localInterfaceIP, in: interfaces)
+        if let connectInterfaceName,
+           TBConnectionDiagnostics.isDirectLinkInterface(name: connectInterfaceName, ip: localInterfaceIP) {
+            // A direct Ethernet/USB peer is never reachable over Wi-Fi, but the
+            // routing table points 169.254/16 at Wi-Fi when it is the primary link.
+            params.prohibitedInterfaceTypes = [.wifi, .cellular]
+        }
         let scopedHost = TBConnectionDiagnostics.scopedReceiverHost(
             receiverIP: receiverIP,
             localIP: localInterfaceIP,

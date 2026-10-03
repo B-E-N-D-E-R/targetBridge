@@ -556,6 +556,9 @@ private struct TBDisplaySenderSessionSettingsSheet: View {
                             }
                         }
                         .pickerStyle(.menu)
+                        .onChange(of: session.localInterfaceIP) { _, _ in
+                            service.localInterfaceDidChange(for: session)
+                        }
                         .disabled(session.isConnected || session.isStreaming)
                     }
 
@@ -974,11 +977,11 @@ private struct TBDisplaySenderSessionSettingsSheet: View {
 
     private var transportDetails: String {
         switch service.language {
-        case .italian: return "Scegli il percorso di rete per questa sessione. Thunderbolt Bridge resta il profilo raccomandato; Network Link e sperimentale."
-        case .english: return "Choose the network path for this session. Thunderbolt Bridge remains the recommended profile; Network Link is experimental."
-        case .german: return "Wähle den Netzwerkpfad für diese Sitzung. Thunderbolt Bridge bleibt die empfohlene Option; Network Link ist experimentell."
-        case .french: return "Choisissez le chemin réseau de cette session. Thunderbolt Bridge reste le profil recommandé ; Network Link est expérimental."
-        case .chinese: return "为该会话选择网络路径。Thunderbolt Bridge 仍然是推荐模式；Network Link 为实验性功能。"
+        case .italian: return "Scegli il percorso di rete per questa sessione. Thunderbolt Bridge ha la latenza più bassa; Ethernet / USB usa un cavo Ethernet, un cavo USB diretto o la rete locale."
+        case .english: return "Choose the network path for this session. Thunderbolt Bridge has the lowest latency; Ethernet / USB uses an Ethernet cable, a direct USB cable, or your local network."
+        case .german: return "Wähle den Netzwerkpfad für diese Sitzung. Thunderbolt Bridge hat die geringste Latenz; Ethernet / USB nutzt ein Ethernet-Kabel, ein direktes USB-Kabel oder das lokale Netzwerk."
+        case .french: return "Choisissez le chemin réseau de cette session. Thunderbolt Bridge offre la latence la plus faible ; Ethernet / USB utilise un câble Ethernet, un câble USB direct ou le réseau local."
+        case .chinese: return "为该会话选择网络路径。Thunderbolt Bridge 延迟最低；以太网 / USB 使用以太网线、USB 直连线或本地网络。"
         }
     }
 

@@ -15,9 +15,10 @@ pipeline.
 Official addons
 ---------------
 
-The current official manifests bundled with the app are:
+In this fork, the former `Network Link` addon is built into the Sender as the
+Ethernet / USB transport and no longer has a manifest. The current official
+manifests bundled with the app are:
 
-- `Network Link`
 - `Audio Relay`
 - `Input Dockstation`
 
