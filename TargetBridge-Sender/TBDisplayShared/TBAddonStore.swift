@@ -70,7 +70,7 @@ final class TBAddonStore: ObservableObject {
 
     func isCapabilityEnabled(_ capability: TBAddonCapability) -> Bool {
         if Self.builtInCapabilities.contains(capability) { return true }
-        addons.contains { addon in
+        return addons.contains { addon in
             isEnabled(addon) && addon.manifest.capabilities.contains(capability) && isCompatible(addon)
         }
     }
