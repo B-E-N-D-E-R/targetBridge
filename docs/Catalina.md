@@ -42,8 +42,9 @@ which Catalina supports.
 
 ## Expectations on 2012–2013 iMacs
 
-- These GPUs hardware-decode H.264 but not HEVC, so the Sender should use
-  H.264. The Receiver advertises HEVC only when VideoToolbox can decode it in
-  hardware, and falls back to software decoding when a stream is rejected.
+- These Macs hardware-decode H.264 but not HEVC. VideoToolbox would still
+  accept HEVC and decode it on the CPU, so this fork makes the Receiver
+  advertise HEVC only when `VTIsHardwareDecodeSupported` reports hardware
+  support; the Sender then picks H.264.
 - The Receiver advertises its real panel size (2560×1440 on a 27" iMac), so
   stream at that resolution rather than a 5K profile.

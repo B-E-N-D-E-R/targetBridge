@@ -19,6 +19,7 @@
 
 #if defined(__APPLE__)
 #  include <CoreVideo/CoreVideo.h>
+#  include <VideoToolbox/VideoToolbox.h>
 #endif
 
 #define ANNEXB_START   "\x00\x00\x00\x01"
@@ -104,6 +105,13 @@ struct tb_decoder *tb_dec_create(tb_frame_cb cb, void *ud) {
 int tb_dec_supports_hevc_hwdecode(void) {
     const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
     if (!codec) return 0;
+
+#if defined(__APPLE__)
+    /* VideoToolbox also accepts HEVC on Macs without an HEVC decode block
+     * (pre-Skylake, e.g. 2012-2014 iMacs) and decodes it on the CPU. Only
+     * advertise HEVC when the GPU decodes it, so those Receivers get H.264. */
+    if (!VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)) return 0;
+#endif
 
     enum AVHWDeviceType type = pick_hwdev();
     if (type == AV_HWDEVICE_TYPE_NONE) return 0;
