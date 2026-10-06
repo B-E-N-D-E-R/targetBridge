@@ -7,13 +7,14 @@ name: Catalina Fork Build
 # - the Sender (macOS 14+), with the built-in Ethernet / USB transport.
 #
 # Run it from the Actions tab (workflow_dispatch) and download the artifacts,
-# or push a tag such as `catalina-v3.5.2` to publish a draft release.
+# push a tag such as `catalina-v3.5.2` to publish a draft release, or push a
+# `catalina-test-<n>` tag to publish a public pre-release for hardware testing.
 
 on:
   workflow_dispatch:
   push:
     branches: [ main, catalina-receiver ]
-    tags: [ 'catalina-v*' ]
+    tags: [ 'catalina-v*', 'catalina-test-*' ]
   pull_request:
     paths:
       - 'TargetBridge-Receiver/**'
@@ -155,8 +156,8 @@ jobs:
           path: build/TargetBridge-Receiver-catalina-x86_64.app.zip
 
   publish-release:
-    name: Publish Draft Release
-    if: startsWith(github.ref, 'refs/tags/catalina-v')
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/catalina-v') || startsWith(github.ref, 'refs/tags/catalina-test-')
     needs: [build-sender, build-receiver-catalina]
     runs-on: ubuntu-latest
     steps:
@@ -166,15 +167,29 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create Draft Release
+      - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
-            artifacts/TargetBridge-Receiver-catalina-x86_64.app.zip \
-            artifacts/TargetBridge-arm64.app.zip \
-            artifacts/TargetBridge-x86_64.app.zip \
-            --title "TargetBridge Catalina fork ${{ github.ref_name }}" \
-            --notes "Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport." \
-            --draft
+          assets=(
+            artifacts/TargetBridge-Receiver-catalina-x86_64.app.zip
+            artifacts/TargetBridge-arm64.app.zip
+            artifacts/TargetBridge-x86_64.app.zip
+          )
+          if [[ "$TAG" == catalina-test-* ]]; then
+            # Public so the files download without a GitHub login, e.g. with
+            # curl on the iMac, whose Safari may not handle github.com.
+            gh release create "$TAG" "${assets[@]}" \
+              --repo "$REPO" \
+              --title "Test build $TAG (untested)" \
+              --notes "Untested build for hardware testing; not a release. Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport. See docs/Catalina.md on the catalina-receiver branch." \
+              --prerelease
+          else
+            gh release create "$TAG" "${assets[@]}" \
+              --repo "$REPO" \
+              --title "TargetBridge Catalina fork $TAG" \
+              --notes "Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport." \
+              --draft
+          fi
