@@ -81,6 +81,16 @@ The Sender's `targetbridge connect --path auto` measures every working route
 (Thunderbolt, direct USB/Ethernet, LAN, Wi-Fi) and picks the fastest; see
 [Automation](Automation.md#1-targetbridge-cli).
 
+## Tested hardware
+
+| Receiver | Connection | Result |
+| --- | --- | --- |
+| iMac14,2 (27-inch, Late 2013, GeForce GTX 780M), macOS 10.15.7 | Cat5e Ethernet cable | Works; smooth, no noticeable lag |
+
+Thunderbolt Bridge and USB-C to USB-A are untested so far. If you try another
+iMac or cable, please open an issue with the model, macOS version, cable and
+result.
+
 ## Expectations on 2012–2013 iMacs
 
 - These Macs hardware-decode H.264 but not HEVC. VideoToolbox would still

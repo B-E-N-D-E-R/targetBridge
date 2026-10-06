@@ -1,3 +1,16 @@
+> [!NOTE]
+> **This is a fork for macOS 10.15 Catalina iMacs.** It adds a Receiver that
+> runs on Catalina and builds Ethernet / USB into the Sender as a regular
+> transport, alongside Thunderbolt Bridge. Tested on a Late 2013 27-inch iMac
+> (macOS 10.15.7) over a Cat5e Ethernet cable.
+>
+> - Download: [fork releases](https://github.com/B-E-N-D-E-R/targetBridge/releases)
+>   (Receiver for Catalina, plus the Sender for Apple Silicon and Intel)
+> - Setup and cable options: [docs/Catalina.md](docs/Catalina.md)
+> - What changed: [docs/releases/catalina-1.0.0.md](docs/releases/catalina-1.0.0.md)
+>
+> Everything else is upstream [swellweb/targetBridge](https://github.com/swellweb/targetBridge) 3.5.2.
+
 > [!IMPORTANT]
 > **A personal update from the maintainer**
 >

@@ -7,7 +7,7 @@ name: Catalina Fork Build
 # - the Sender (macOS 14+), with the built-in Ethernet / USB transport.
 #
 # Run it from the Actions tab (workflow_dispatch) and download the artifacts,
-# push a tag such as `catalina-v3.5.2` to publish a draft release, or publish
+# push a tag such as `catalina-v1.0.0` to publish a draft release, or publish
 # a public pre-release for hardware testing by pushing a `catalina-test-<n>`
 # tag or running the workflow with "Publish a public test pre-release" ticked.
 
@@ -187,6 +187,9 @@ jobs:
     needs: [build-sender, build-receiver-catalina]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
       - name: Download Artifacts
         uses: actions/download-artifact@v8
         with:
@@ -207,8 +210,13 @@ jobs:
           )
           # A release created on GitHub's Releases page pushes its tag, which
           # runs this workflow; attach the apps to that release.
+          # docs/releases/catalina-<version>.md holds the notes for catalina-v<version>.
+          notes_file="docs/releases/catalina-${TAG#catalina-v}.md"
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --repo "$REPO" --clobber
+            if [[ "$TAG" == catalina-v* && -f "$notes_file" ]]; then
+              gh release edit "$TAG" --repo "$REPO" --notes-file "$notes_file"
+            fi
           elif [[ "$TAG" == catalina-test-* ]]; then
             # Public so the files download without a GitHub login, e.g. with
             # curl on the iMac, whose Safari may not handle github.com.
@@ -219,9 +227,11 @@ jobs:
               --notes "Untested build for hardware testing; not a release. Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport. See docs/Catalina.md on the catalina-receiver branch." \
               --prerelease
           else
+            notes=(--notes "Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport.")
+            [[ -f "$notes_file" ]] && notes=(--notes-file "$notes_file")
             gh release create "$TAG" "${assets[@]}" \
               --repo "$REPO" \
-              --title "TargetBridge Catalina fork $TAG" \
-              --notes "Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport." \
+              --title "TargetBridge Catalina fork ${TAG#catalina-v}" \
+              "${notes[@]}" \
               --draft
           fi
