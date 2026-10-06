@@ -18,7 +18,15 @@ fixes that by:
    to an API newer than 10.15 without a runtime check fails the build instead
    of crashing on the iMac;
 4. checking the executable's `minos`, the Info.plist minimum, and the linked
-   libraries before uploading `TargetBridge-Receiver-catalina-x86_64.app.zip`.
+   libraries;
+5. checking every symbol the Receiver imports against the macOS 10.15 SDK's
+   exported-symbol stubs (`TargetBridge-Receiver/scripts/check_sdk_symbols.py`).
+   The current SDK declares some functions, such as
+   `CGPreflightListenEventAccess`, as available on 10.15 although Catalina
+   does not export them, and step 3 cannot catch that. The Receiver looks that
+   one up at runtime and falls back to `IOHIDCheckAccess` on Catalina.
+
+The result is uploaded as `TargetBridge-Receiver-catalina-x86_64.app.zip`.
 
 The same workflow also builds this fork's Sender (`TargetBridge-arm64.app.zip`
 and `TargetBridge-x86_64.app.zip`), which has Ethernet / USB built in. See

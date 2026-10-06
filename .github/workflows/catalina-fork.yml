@@ -147,6 +147,23 @@ jobs:
             exit 1
           fi
 
+      - name: Fetch macOS 10.15 SDK Symbol Stubs
+        run: |
+          # Only the .tbd stubs (exported-symbol lists), not the whole SDK.
+          git clone --quiet --depth 1 --filter=blob:none --no-checkout \
+            https://github.com/phracker/MacOSX-SDKs.git "$RUNNER_TEMP/MacOSX-SDKs"
+          cd "$RUNNER_TEMP/MacOSX-SDKs"
+          git sparse-checkout set --no-cone 'MacOSX10.15.sdk/**/*.tbd'
+          git checkout --quiet
+
+      - name: Check Imports Against macOS 10.15
+        run: |
+          # The current SDK declares some functions as available on 10.15 that
+          # Catalina does not export, which makes dyld refuse to launch the app.
+          python3 -I TargetBridge-Receiver/scripts/check_sdk_symbols.py \
+            --sdk "$RUNNER_TEMP/MacOSX-SDKs/MacOSX10.15.sdk" \
+            "build/TargetBridge Receiver.app/Contents/MacOS/TargetBridgeReceiver"
+
       - name: Check Receiver Permission Probe
         run: ruby TargetBridge-Sender/scripts/test_permission_status.rb receiver 'build/TargetBridge Receiver.app/Contents/MacOS/TargetBridgeReceiver'
 

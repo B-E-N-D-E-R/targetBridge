@@ -29,6 +29,9 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreAudio/CoreAudio.h>
+#include <IOKit/hidsystem/IOHIDLib.h>
+#include <dlfcn.h>
+#include <stdbool.h>
 
 /* kAudioObjectPropertyElementMain is the macOS 12+ SDK spelling; older SDKs
  * only define kAudioObjectPropertyElementMaster (both are numerically 0). */
@@ -401,7 +404,19 @@ static void tb_receiver_apply_language_preference(struct app *a) {
 }
 
 static int tb_receiver_input_monitoring_trusted(void) {
-    return CGPreflightListenEventAccess() ? 1 : 0;
+    /* The SDK declares CGPreflightListenEventAccess for 10.15, but CoreGraphics
+     * only exports it from macOS 11; linking it directly stops dyld from
+     * launching the Receiver on Catalina. Resolve it at runtime and fall back
+     * to IOHIDCheckAccess, which Catalina does export. */
+    typedef bool (*tb_preflight_fn)(void);
+    static tb_preflight_fn preflight = NULL;
+    static int resolved = 0;
+    if (!resolved) {
+        preflight = (tb_preflight_fn)dlsym(RTLD_DEFAULT, "CGPreflightListenEventAccess");
+        resolved = 1;
+    }
+    if (preflight) return preflight() ? 1 : 0;
+    return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted ? 1 : 0;
 }
 
 static int tb_receiver_accessibility_trusted(void) {
