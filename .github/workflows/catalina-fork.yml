@@ -7,11 +7,17 @@ name: Catalina Fork Build
 # - the Sender (macOS 14+), with the built-in Ethernet / USB transport.
 #
 # Run it from the Actions tab (workflow_dispatch) and download the artifacts,
-# push a tag such as `catalina-v3.5.2` to publish a draft release, or push a
-# `catalina-test-<n>` tag to publish a public pre-release for hardware testing.
+# push a tag such as `catalina-v3.5.2` to publish a draft release, or publish
+# a public pre-release for hardware testing by pushing a `catalina-test-<n>`
+# tag or running the workflow with "Publish a public test pre-release" ticked.
 
 on:
   workflow_dispatch:
+    inputs:
+      test_release:
+        description: 'Publish a public test pre-release (catalina-test-<run number>)'
+        type: boolean
+        default: false
   push:
     branches: [ main, catalina-receiver ]
     tags: [ 'catalina-v*', 'catalina-test-*' ]
@@ -157,7 +163,10 @@ jobs:
 
   publish-release:
     name: Publish Release
-    if: startsWith(github.ref, 'refs/tags/catalina-v') || startsWith(github.ref, 'refs/tags/catalina-test-')
+    if: >-
+      startsWith(github.ref, 'refs/tags/catalina-v') ||
+      startsWith(github.ref, 'refs/tags/catalina-test-') ||
+      (github.event_name == 'workflow_dispatch' && inputs.test_release)
     needs: [build-sender, build-receiver-catalina]
     runs-on: ubuntu-latest
     steps:
@@ -170,19 +179,25 @@ jobs:
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && format('catalina-test-{0}', github.run_number) || github.ref_name }}
           REPO: ${{ github.repository }}
+          TARGET: ${{ github.sha }}
         run: |
           assets=(
             artifacts/TargetBridge-Receiver-catalina-x86_64.app.zip
             artifacts/TargetBridge-arm64.app.zip
             artifacts/TargetBridge-x86_64.app.zip
           )
-          if [[ "$TAG" == catalina-test-* ]]; then
+          # A release created on GitHub's Releases page pushes its tag, which
+          # runs this workflow; attach the apps to that release.
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --repo "$REPO" --clobber
+          elif [[ "$TAG" == catalina-test-* ]]; then
             # Public so the files download without a GitHub login, e.g. with
             # curl on the iMac, whose Safari may not handle github.com.
             gh release create "$TAG" "${assets[@]}" \
               --repo "$REPO" \
+              --target "$TARGET" \
               --title "Test build $TAG (untested)" \
               --notes "Untested build for hardware testing; not a release. Receiver for Intel iMacs on macOS 10.15 Catalina, plus the Sender (macOS 14+) with the built-in Ethernet / USB transport. See docs/Catalina.md on the catalina-receiver branch." \
               --prerelease
