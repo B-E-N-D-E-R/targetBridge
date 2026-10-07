@@ -68,6 +68,7 @@ int  tb_disp_get_info(struct tb_display *d, struct tb_display_info *info);
 /* Render a simple launcher/status UI before the video stream starts. */
 void tb_disp_render_status(struct tb_display *d,
                            const char *ip,
+                           const char *address_label,
                            const char *status,
                            const char *sender,
                            const char *panel,

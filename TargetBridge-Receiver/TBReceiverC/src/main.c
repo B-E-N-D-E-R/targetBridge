@@ -92,6 +92,7 @@ struct app {
     char     ethernet_ip_text[64];
     char     wifi_ip_text[64];
     char     display_host[128]; /* short hostname (or hostname+IP), cached at startup */
+    const char *address_label_key; /* i18n key naming the link of the shown address */
     char     status_text[128];
     char     sender_text[128];
     char     panel_text[128];
@@ -1897,6 +1898,15 @@ static void close_client(struct app *a) {
     fprintf(stderr, "[main] client disconnected\n");
 }
 
+/* Names the link of the address the status screen shows, in the same
+ * Thunderbolt -> direct cable -> local network order that picks it. */
+static const char *tb_receiver_address_label_key(const char *tb_ip, const char *usb_ip, const char *net_ip) {
+    if (tb_ip && tb_ip[0] != '\0') return "receiver.ui.ip_thunderbolt_bridge";
+    if (usb_ip && usb_ip[0] != '\0') return "receiver.ui.ip_direct_link";
+    if (net_ip && net_ip[0] != '\0') return "receiver.ui.ip_local_network";
+    return "receiver.ui.ip_thunderbolt_bridge";
+}
+
 /* Build the display string for the host/IP line of the status screen.
  * have_ip: non-zero if ip_fallback is a real IP, zero if no IP is available.
  * Called once at startup (and when the IP changes) to cache the result in
@@ -2006,6 +2016,7 @@ int main(int argc, char **argv) {
     tb_refresh_idle_localized_strings(&a);
     build_display_host(a.display_host, sizeof(a.display_host), a.ip_text,
                        tb_ip[0] || usb_ip[0] || net_ip[0]);
+    a.address_label_key = tb_receiver_address_label_key(tb_ip, usb_ip, net_ip);
     tb_receiver_apply_language_preference(&a);
     tb_gesture_bridge_install(tb_receiver_space_switch_callback, &a);
     tb_gesture_bridge_set_active(0);
@@ -2082,6 +2093,8 @@ int main(int argc, char **argv) {
                 snprintf(a.wifi_ip_text, sizeof(a.wifi_ip_text), "%s", refreshed_wifi_ip);
                 snprintf(a.ip_text, sizeof(a.ip_text), "%s", preferred_ip);
                 build_display_host(a.display_host, sizeof(a.display_host), preferred_ip, have_refreshed_ip);
+                a.address_label_key = tb_receiver_address_label_key(refreshed_tb_ip, refreshed_usb_ip,
+                                                                     refreshed_net_ip);
                 if (refreshed_tb_ip[0] != '\0') {
                     fprintf(stderr, "[main] Thunderbolt Bridge IP = %s\n", refreshed_tb_ip);
                 }
@@ -2170,7 +2183,8 @@ int main(int argc, char **argv) {
             /* No client, or a connection that hasn't started a real streaming
              * session (e.g. a transient UI-language push during discovery):
              * stay on the windowed waiting screen, don't flash fullscreen. */
-            tb_disp_render_status(a.disp, a.display_host, a.status_text, a.sender_text, a.panel_text, a.mode_text, a.language_text, a.permissions_text);
+            tb_disp_render_status(a.disp, a.display_host, tb_i18n_get(a.address_label_key), a.status_text,
+                                  a.sender_text, a.panel_text, a.mode_text, a.language_text, a.permissions_text);
         } else if (!a.have_video_frame) {
             tb_disp_render_connecting(a.disp);
         }

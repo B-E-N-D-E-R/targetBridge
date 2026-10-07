@@ -13,9 +13,11 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
+#include <ImageIO/ImageIO.h>
 #include <SDL.h>
 #include <dlfcn.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,9 +62,12 @@ struct tb_display {
     char          last_mode[128];
     char          last_language[96];
     char          last_permissions[160];
+    char          last_address_label[96];
     int           last_drawable_w;
     int           last_drawable_h;
     int           status_is_connecting;
+    CGImageRef    app_icon;
+    int           app_icon_loaded;
 };
 
 static uint16_t tb_disp_mac_keycode_for_sdl_scancode(SDL_Scancode scancode) {
@@ -191,31 +196,36 @@ static void tb_disp_destroy_status_texture(struct tb_display *d) {
     }
 }
 
-static void tb_disp_draw_text(CGContextRef ctx,
-                              const char *text,
-                              const char *font_name,
-                              CGFloat font_size,
-                              CGFloat x,
-                              CGFloat y,
-                              CGFloat r,
-                              CGFloat g,
-                              CGFloat b) {
-    if (!text || !*text) return;
-
-    CFStringRef cf_text = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
-    if (!cf_text) return;
-
-    CFStringRef cf_font_name = CFStringCreateWithCString(NULL, font_name, kCFStringEncodingUTF8);
-    if (!cf_font_name) {
-        CFRelease(cf_text);
-        return;
+/* "system" and "system-bold" select the macOS UI font (San Francisco on
+ * 10.11+); anything else is a PostScript font name. */
+static CTFontRef tb_disp_create_font(const char *font_name, CGFloat font_size) {
+    if (strcmp(font_name, "system") == 0) {
+        return CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, font_size, NULL);
     }
-
+    if (strcmp(font_name, "system-bold") == 0) {
+        return CTFontCreateUIFontForLanguage(kCTFontUIFontEmphasizedSystem, font_size, NULL);
+    }
+    CFStringRef cf_font_name = CFStringCreateWithCString(NULL, font_name, kCFStringEncodingUTF8);
+    if (!cf_font_name) return NULL;
     CTFontRef font = CTFontCreateWithName(cf_font_name, font_size, NULL);
     CFRelease(cf_font_name);
+    return font;
+}
+
+static CTLineRef tb_disp_create_line(const char *text,
+                                     const char *font_name,
+                                     CGFloat font_size,
+                                     CGFloat r,
+                                     CGFloat g,
+                                     CGFloat b,
+                                     CGFloat kern) {
+    CFStringRef cf_text = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    if (!cf_text) return NULL;
+
+    CTFontRef font = tb_disp_create_font(font_name, font_size);
     if (!font) {
         CFRelease(cf_text);
-        return;
+        return NULL;
     }
 
     CGFloat components[4] = { r, g, b, 1.0 };
@@ -225,41 +235,92 @@ static void tb_disp_draw_text(CGContextRef ctx,
     if (!color) {
         CFRelease(font);
         CFRelease(cf_text);
-        return;
+        return NULL;
     }
 
-    const void *keys[] = { kCTFontAttributeName, kCTForegroundColorAttributeName };
-    const void *values[] = { font, color };
+    CFNumberRef kern_number = CFNumberCreate(NULL, kCFNumberCGFloatType, &kern);
+    const void *keys[] = { kCTFontAttributeName, kCTForegroundColorAttributeName, kCTKernAttributeName };
+    const void *values[] = { font, color, kern_number };
     CFDictionaryRef attrs = CFDictionaryCreate(
         NULL,
         keys,
         values,
-        2,
+        kern_number ? 3 : 2,
         &kCFTypeDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks
     );
-    CFAttributedStringRef attributed = CFAttributedStringCreate(NULL, cf_text, attrs);
+    CFAttributedStringRef attributed = attrs ? CFAttributedStringCreate(NULL, cf_text, attrs) : NULL;
     CTLineRef line = attributed ? CTLineCreateWithAttributedString(attributed) : NULL;
-
-    if (line) {
-        CGContextSaveGState(ctx);
-        /* The whole status canvas is flipped to get a top-left origin.
-         * CoreText glyph rasterization does not follow that transform the
-         * way the filled rects do, so we locally flip again just for text. */
-        CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
-        CGContextTranslateCTM(ctx, 0.0, 2.0 * y);
-        CGContextScaleCTM(ctx, 1.0, -1.0);
-        CGContextSetTextPosition(ctx, x, y);
-        CTLineDraw(line, ctx);
-        CGContextRestoreGState(ctx);
-        CFRelease(line);
-    }
 
     if (attributed) CFRelease(attributed);
     if (attrs) CFRelease(attrs);
+    if (kern_number) CFRelease(kern_number);
     CGColorRelease(color);
     CFRelease(font);
     CFRelease(cf_text);
+    return line;
+}
+
+enum tb_disp_align {
+    TB_ALIGN_LEFT = 0,
+    TB_ALIGN_CENTER = 1,
+    TB_ALIGN_RIGHT = 2
+};
+
+/* Draws one line of text with its baseline at y (top-left canvas origin).
+ * align picks what x means: the left edge, the centre or the right edge.
+ * A max_width above zero shrinks the font until the line fits. Returns the
+ * drawn width. */
+static CGFloat tb_disp_draw_text_ex(CGContextRef ctx,
+                                    const char *text,
+                                    const char *font_name,
+                                    CGFloat font_size,
+                                    CGFloat x,
+                                    CGFloat y,
+                                    CGFloat r,
+                                    CGFloat g,
+                                    CGFloat b,
+                                    int align,
+                                    CGFloat max_width,
+                                    CGFloat kern) {
+    if (!text || !*text) return 0.0;
+
+    CTLineRef line = tb_disp_create_line(text, font_name, font_size, r, g, b, kern);
+    if (!line) return 0.0;
+    CGFloat width = (CGFloat)CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+    if (max_width > 0.0 && width > max_width && width > 0.0) {
+        const CGFloat fitted = floor(font_size * max_width / width * 10.0) / 10.0;
+        CFRelease(line);
+        line = tb_disp_create_line(text, font_name, fitted, r, g, b, kern);
+        if (!line) return 0.0;
+        width = (CGFloat)CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+    }
+
+    CGFloat left = x;
+    if (align == TB_ALIGN_CENTER) left = x - width / 2.0;
+    else if (align == TB_ALIGN_RIGHT) left = x - width;
+
+    CGContextSaveGState(ctx);
+    /* The whole status canvas is flipped to get a top-left origin.
+     * CoreText glyph rasterization does not follow that transform the
+     * way the filled rects do, so we locally flip again just for text. */
+    CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+    CGContextTranslateCTM(ctx, 0.0, 2.0 * y);
+    CGContextScaleCTM(ctx, 1.0, -1.0);
+    CGContextSetTextPosition(ctx, left, y);
+    CTLineDraw(line, ctx);
+    CGContextRestoreGState(ctx);
+    CFRelease(line);
+    return width;
+}
+
+static CGFloat tb_disp_text_width(const char *text, const char *font_name, CGFloat font_size, CGFloat kern) {
+    if (!text || !*text) return 0.0;
+    CTLineRef line = tb_disp_create_line(text, font_name, font_size, 0, 0, 0, kern);
+    if (!line) return 0.0;
+    const CGFloat width = (CGFloat)CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+    CFRelease(line);
+    return width;
 }
 
 static void tb_disp_fill_rect(CGContextRef ctx,
@@ -291,6 +352,75 @@ static void tb_disp_fill_rounded_rect(CGContextRef ctx,
     CGContextAddPath(ctx, path);
     CGContextFillPath(ctx);
     CGPathRelease(path);
+}
+
+static void tb_disp_stroke_rounded_rect(CGContextRef ctx,
+                                        CGFloat x,
+                                        CGFloat y,
+                                        CGFloat w,
+                                        CGFloat h,
+                                        CGFloat radius,
+                                        CGFloat line_width,
+                                        CGFloat r,
+                                        CGFloat g,
+                                        CGFloat b,
+                                        CGFloat a) {
+    CGPathRef path = CGPathCreateWithRoundedRect(CGRectMake(x, y, w, h), radius, radius, NULL);
+    if (!path) return;
+    CGContextSetRGBStrokeColor(ctx, r, g, b, a);
+    CGContextSetLineWidth(ctx, line_width);
+    CGContextAddPath(ctx, path);
+    CGContextStrokePath(ctx);
+    CGPathRelease(path);
+}
+
+/* The Receiver's own app icon from its bundle; NULL when running unbundled. */
+static CGImageRef tb_disp_load_app_icon(void) {
+    CFBundleRef bundle = CFBundleGetMainBundle();
+    if (!bundle) return NULL;
+    CFURLRef url = CFBundleCopyResourceURL(bundle, CFSTR("TargetBridgeReceiver"), CFSTR("icns"), NULL);
+    if (!url) return NULL;
+    CGImageSourceRef source = CGImageSourceCreateWithURL(url, NULL);
+    CFRelease(url);
+    if (!source) return NULL;
+
+    CGImageRef best = NULL;
+    size_t best_width = 0;
+    const size_t count = CGImageSourceGetCount(source);
+    for (size_t i = 0; i < count; i++) {
+        CGImageRef image = CGImageSourceCreateImageAtIndex(source, i, NULL);
+        if (!image) continue;
+        const size_t width = CGImageGetWidth(image);
+        if (width > best_width) {
+            if (best) CGImageRelease(best);
+            best = image;
+            best_width = width;
+        } else {
+            CGImageRelease(image);
+        }
+    }
+    CFRelease(source);
+    return best;
+}
+
+static void tb_disp_draw_brand_icon(CGContextRef ctx, CGFloat x, CGFloat y, CGFloat size);
+
+static void tb_disp_draw_app_icon(struct tb_display *d, CGContextRef ctx, CGFloat x, CGFloat y, CGFloat size) {
+    if (!d->app_icon_loaded) {
+        d->app_icon = tb_disp_load_app_icon();
+        d->app_icon_loaded = 1;
+    }
+    if (!d->app_icon) {
+        tb_disp_draw_brand_icon(ctx, x, y, size);
+        return;
+    }
+    CGContextSaveGState(ctx);
+    CGContextSetInterpolationQuality(ctx, kCGInterpolationHigh);
+    /* Images draw bottom-up; undo the canvas flip locally. */
+    CGContextTranslateCTM(ctx, x, y + size);
+    CGContextScaleCTM(ctx, 1.0, -1.0);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, size, size), d->app_icon);
+    CGContextRestoreGState(ctx);
 }
 
 static void tb_disp_draw_brand_icon(CGContextRef ctx, CGFloat x, CGFloat y, CGFloat size) {
@@ -342,8 +472,66 @@ static void tb_disp_draw_connecting_spinner(struct tb_display *d, int drawable_w
     SDL_SetRenderDrawBlendMode(d->ren, old_blend);
 }
 
+/* Permission chips: the text holds one "Name: state" entry per permission,
+ * separated by three spaces. Granted ones are green, missing ones amber. */
+static void tb_disp_draw_permission_chips(CGContextRef ctx,
+                                          const char *permissions,
+                                          const char *font_name,
+                                          CGFloat font_size,
+                                          CGFloat x,
+                                          CGFloat baseline,
+                                          CGFloat max_width,
+                                          CGFloat scale) {
+    if (!permissions || !*permissions) return;
+
+    const CGFloat pad = 10.0 * scale;
+    const CGFloat gap = 6.0 * scale;
+    const CGFloat chip_h = font_size * 1.6;
+    const CGFloat line_step = chip_h + gap;
+    CGFloat cursor_x = x;
+    CGFloat cursor_baseline = baseline;
+
+    const char *p = permissions;
+    while (*p) {
+        const char *sep = strstr(p, "   ");
+        const size_t len = sep ? (size_t)(sep - p) : strlen(p);
+        char part[96];
+        const size_t n = len < sizeof(part) - 1 ? len : sizeof(part) - 1;
+        memcpy(part, p, n);
+        part[n] = '\0';
+
+        if (part[0] != '\0') {
+            const int granted = strstr(part, "OK") != NULL || strstr(part, "\xE6\xAD\xA3\xE5\xB8\xB8") != NULL;
+            const CGFloat text_w = tb_disp_text_width(part, font_name, font_size, 0.0);
+            const CGFloat chip_w = text_w + 2.0 * pad;
+            if (cursor_x > x && cursor_x + chip_w > x + max_width) {
+                cursor_x = x;
+                cursor_baseline += line_step;
+            }
+            const CGFloat chip_top = cursor_baseline - font_size * 1.12;
+            if (granted) {
+                tb_disp_fill_rounded_rect(ctx, cursor_x, chip_top, chip_w, chip_h, chip_h / 2.0,
+                                          0.12, 0.24, 0.15, 1.0);
+                tb_disp_draw_text_ex(ctx, part, font_name, font_size, cursor_x + pad, cursor_baseline,
+                                     0.36, 0.89, 0.48, TB_ALIGN_LEFT, 0.0, 0.0);
+            } else {
+                tb_disp_fill_rounded_rect(ctx, cursor_x, chip_top, chip_w, chip_h, chip_h / 2.0,
+                                          0.23, 0.165, 0.07, 1.0);
+                tb_disp_draw_text_ex(ctx, part, font_name, font_size, cursor_x + pad, cursor_baseline,
+                                     0.96, 0.72, 0.25, TB_ALIGN_LEFT, 0.0, 0.0);
+            }
+            cursor_x += chip_w + gap;
+        }
+
+        if (!sep) break;
+        p = sep;
+        while (*p == ' ') p++;
+    }
+}
+
 static void tb_disp_rebuild_status_texture(struct tb_display *d,
                                            const char *ip,
+                                           const char *address_label,
                                            const char *status,
                                            const char *sender,
                                            const char *panel,
@@ -382,93 +570,137 @@ static void tb_disp_rebuild_status_texture(struct tb_display *d,
 
     const char *current_language = tb_i18n_current_language();
     const int zh = current_language && strncmp(current_language, "zh", 2) == 0;
-    const char *title_font = zh ? "PingFangSC-Semibold" : "Helvetica-Bold";
-    const char *body_font = zh ? "PingFangSC-Regular" : "Helvetica";
-    const char *section_font = zh ? "PingFangSC-Semibold" : "Helvetica-Bold";
+    const char *title_font = zh ? "PingFangSC-Semibold" : "system-bold";
+    const char *body_font = zh ? "PingFangSC-Regular" : "system";
     const char *mono_font = "Menlo";
     const char *mono_bold_font = "Menlo-Bold";
 
+    /* Every size below is in points of a 1600 x 900 design, scaled to the
+     * real drawable, so the screen reads the same on 1440p and 5K panels. */
+    const CGFloat w = (CGFloat)drawable_w;
+    const CGFloat h = (CGFloat)drawable_h;
+    const CGFloat s = fmin(w / 1600.0, h / 900.0);
+    const CGFloat cx = w / 2.0;
+
+    /* Palette: near-black ground, primary/secondary text, green accent. */
+    tb_disp_fill_rect(ctx, 0, 0, w, h, 0.059, 0.063, 0.071, 1.0);
+
     if (connecting) {
-        const CGFloat min_side = (CGFloat)(drawable_w < drawable_h ? drawable_w : drawable_h);
-        const CGFloat scale = min_side / 720.0;
-        const CGFloat icon_size = 132.0 * scale;
-        const CGFloat center_x = (CGFloat)drawable_w / 2.0;
-        const CGFloat icon_x = center_x - icon_size / 2.0;
-        const CGFloat icon_y = (CGFloat)drawable_h / 2.0 - 206.0 * scale;
-
-        tb_disp_fill_rect(ctx, 0, 0, (CGFloat)drawable_w, (CGFloat)drawable_h, 0.035, 0.045, 0.06, 1.0);
-        tb_disp_fill_rounded_rect(ctx,
-                                  center_x - 300.0 * scale,
-                                  icon_y - 60.0 * scale,
-                                  600.0 * scale,
-                                  490.0 * scale,
-                                  38.0 * scale,
-                                  0.075, 0.09, 0.12, 1.0);
-        tb_disp_draw_brand_icon(ctx, icon_x, icon_y, icon_size);
-        tb_disp_draw_text(ctx, "TargetBridge", title_font, 42.0 * scale,
-                          center_x - 156.0 * scale, icon_y + icon_size + 74.0 * scale,
-                          0.95, 0.98, 0.97);
-        tb_disp_draw_text(ctx, "RECEIVER", mono_bold_font, 15.0 * scale,
-                          center_x - 48.0 * scale, icon_y + icon_size + 104.0 * scale,
-                          0.40, 0.90, 0.59);
-        tb_disp_draw_text(ctx, tb_i18n_get("receiver.splash.connecting"), body_font, 23.0 * scale,
-                          center_x - 158.0 * scale, icon_y + icon_size + 166.0 * scale,
-                          0.93, 0.95, 0.99);
-        tb_disp_draw_text(ctx, tb_i18n_get("receiver.splash.waiting_first_frame"), body_font, 17.0 * scale,
-                          center_x - 178.0 * scale, icon_y + icon_size + 202.0 * scale,
-                          0.62, 0.68, 0.77);
-        tb_disp_draw_text(ctx, TB_RECEIVER_VERSION, mono_font, 13.0 * scale,
-                          center_x - 26.0 * scale, icon_y + icon_size + 310.0 * scale,
-                          0.40, 0.45, 0.53);
+        /* The SDL spinner sits at h/2 + min_side/5, below this stack. */
+        CGFloat y = h / 2.0 - 230.0 * s;
+        const CGFloat icon_size = 112.0 * s;
+        tb_disp_draw_app_icon(d, ctx, cx - icon_size / 2.0, y, icon_size);
+        y += icon_size + 52.0 * s;
+        tb_disp_draw_text_ex(ctx, "TargetBridge", title_font, 40.0 * s, cx, y,
+                             0.96, 0.96, 0.97, TB_ALIGN_CENTER, 0.0, 0.0);
+        y += 30.0 * s;
+        tb_disp_draw_text_ex(ctx, "RECEIVER", title_font, 14.0 * s, cx, y,
+                             0.557, 0.557, 0.576, TB_ALIGN_CENTER, 0.0, 2.0 * s);
+        y += 56.0 * s;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.splash.connecting"), title_font, 24.0 * s, cx, y,
+                             0.96, 0.96, 0.97, TB_ALIGN_CENTER, w - 240.0 * s, 0.0);
+        y += 34.0 * s;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.splash.waiting_first_frame"), body_font, 17.0 * s, cx, y,
+                             0.63, 0.63, 0.65, TB_ALIGN_CENTER, w - 240.0 * s, 0.0);
+        tb_disp_draw_text_ex(ctx, TB_RECEIVER_VERSION, mono_font, 13.0 * s, cx, h - 40.0 * s,
+                             0.557, 0.557, 0.576, TB_ALIGN_CENTER, 0.0, 0.0);
     } else {
+        const CGFloat footer_h = 150.0 * s;
+        const CGFloat footer_top = h - footer_h;
+        const CGFloat max_text = w - 240.0 * s;
+        const CGFloat stack_h = 470.0 * s;
+        CGFloat y = fmax(30.0 * s, (footer_top - stack_h) / 2.0);
 
-    tb_disp_fill_rect(ctx, 0, 0, (CGFloat)drawable_w, (CGFloat)drawable_h, 0.06, 0.07, 0.09, 1.0);
-    tb_disp_fill_rect(ctx, 48, 52, (CGFloat)drawable_w - 96, (CGFloat)drawable_h - 104, 0.11, 0.12, 0.15, 1.0);
-    tb_disp_fill_rect(ctx, 48, (CGFloat)drawable_h - 152, (CGFloat)drawable_w - 96, 2, 0.22, 0.24, 0.29, 1.0);
+        /* Centre: icon, title, headline, address, status, help. */
+        const CGFloat icon_size = 96.0 * s;
+        tb_disp_draw_app_icon(d, ctx, cx - icon_size / 2.0, y, icon_size);
+        y += icon_size + 36.0 * s;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.title"), title_font, 14.0 * s, cx, y,
+                             0.557, 0.557, 0.576, TB_ALIGN_CENTER, max_text, 2.0 * s);
+        y += 50.0 * s;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.subtitle"), title_font, 40.0 * s, cx, y,
+                             0.96, 0.96, 0.97, TB_ALIGN_CENTER, max_text, 0.0);
+        y += 70.0 * s;
+        tb_disp_draw_text_ex(ctx, ip, mono_bold_font, 46.0 * s, cx, y,
+                             0.357, 0.89, 0.478, TB_ALIGN_CENTER, max_text, 0.0);
+        y += 30.0 * s;
+        tb_disp_draw_text_ex(ctx, address_label, title_font, 13.0 * s, cx, y,
+                             0.557, 0.557, 0.576, TB_ALIGN_CENTER, max_text, 1.5 * s);
+        y += 26.0 * s;
 
-    const CGFloat outer_x = 72.0;
-    const CGFloat outer_w = (CGFloat)drawable_w - 144.0;
-    const CGFloat top_y = (CGFloat)drawable_h - 176.0;
-    const CGFloat card_gap = 28.0;
-    const CGFloat card_w = (outer_w - card_gap) / 2.0;
+        const int waiting = strcmp(status, tb_i18n_get("receiver.status.waiting_for_sender")) == 0;
+        const CGFloat pill_font = 17.0 * s;
+        const CGFloat dot = 10.0 * s;
+        const CGFloat pill_pad = 18.0 * s;
+        const CGFloat pill_h = 38.0 * s;
+        const CGFloat status_w = fmin(tb_disp_text_width(status, body_font, pill_font, 0.0), max_text);
+        const CGFloat pill_w = pill_pad + dot + 10.0 * s + status_w + pill_pad;
+        const CGFloat pill_x = cx - pill_w / 2.0;
+        tb_disp_fill_rounded_rect(ctx, pill_x, y, pill_w, pill_h, pill_h / 2.0, 0.122, 0.125, 0.137, 1.0);
+        tb_disp_stroke_rounded_rect(ctx, pill_x, y, pill_w, pill_h, pill_h / 2.0, fmax(1.0, s),
+                                    0.2, 0.2, 0.22, 1.0);
+        if (waiting) {
+            CGContextSetRGBFillColor(ctx, 0.96, 0.72, 0.25, 1.0);
+        } else {
+            CGContextSetRGBFillColor(ctx, 0.357, 0.89, 0.478, 1.0);
+        }
+        CGContextFillEllipseInRect(ctx, CGRectMake(pill_x + pill_pad, y + (pill_h - dot) / 2.0, dot, dot));
+        tb_disp_draw_text_ex(ctx, status, body_font, pill_font, pill_x + pill_pad + dot + 10.0 * s, y + 25.0 * s,
+                             0.96, 0.96, 0.97, TB_ALIGN_LEFT, max_text, 0.0);
+        y += pill_h + 40.0 * s;
 
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.title"), title_font, 28, 72, (CGFloat)drawable_h - 84, 0.95, 0.97, 1.0);
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.subtitle"), body_font, 17, 72, (CGFloat)drawable_h - 118, 0.72, 0.76, 0.84);
-    tb_disp_draw_text(ctx, TB_RECEIVER_VERSION, mono_bold_font, 17, (CGFloat)drawable_w - 220, (CGFloat)drawable_h - 82, 0.64, 0.69, 0.78);
-    tb_disp_draw_text(ctx, TB_RECEIVER_BUILD, mono_font, 13, (CGFloat)drawable_w - 220, (CGFloat)drawable_h - 114, 0.53, 0.57, 0.66);
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.help_1"), body_font, 17.0 * s, cx, y,
+                             0.63, 0.63, 0.65, TB_ALIGN_CENTER, max_text, 0.0);
+        y += 28.0 * s;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.help_2"), body_font, 17.0 * s, cx, y,
+                             0.63, 0.63, 0.65, TB_ALIGN_CENTER, max_text, 0.0);
+        y += 28.0 * s;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.help_3"), body_font, 17.0 * s, cx, y,
+                             0.63, 0.63, 0.65, TB_ALIGN_CENTER, max_text, 0.0);
 
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.ip_thunderbolt_bridge"), section_font, 15, outer_x, top_y, 0.54, 0.62, 0.76);
-    tb_disp_draw_text(ctx, ip, mono_bold_font, 34, outer_x, top_y - 42.0, 0.43, 0.93, 0.60);
+        /* Footer: five columns of details along the bottom edge. */
+        tb_disp_fill_rect(ctx, 0, footer_top, w, fmax(1.0, s), 0.15, 0.15, 0.165, 1.0);
+        const CGFloat margin = 40.0 * s;
+        const CGFloat col_w = (w - 2.0 * margin) / 5.0;
+        const CGFloat col_max = col_w - 16.0 * s;
+        const CGFloat label_y = footer_top + 36.0 * s;
+        const CGFloat value_y = footer_top + 66.0 * s;
+        const CGFloat label_size = 11.0 * s;
+        const CGFloat label_kern = 1.2 * s;
 
-    const CGFloat info_top = top_y - 126.0;
-    const CGFloat info_h = 194.0;
-    tb_disp_fill_rect(ctx, outer_x, info_top - info_h, card_w, info_h, 0.14, 0.15, 0.19, 1.0);
-    tb_disp_fill_rect(ctx, outer_x + card_w + card_gap, info_top - info_h, card_w, info_h, 0.14, 0.15, 0.19, 1.0);
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.permissions"), title_font, label_size,
+                             margin, label_y, 0.557, 0.557, 0.576, TB_ALIGN_LEFT, col_max, label_kern);
+        tb_disp_draw_permission_chips(ctx, permissions, body_font, 13.0 * s, margin, value_y, col_max, s);
 
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.status"), section_font, 15, outer_x + 20.0, info_top - 34.0, 0.54, 0.62, 0.76);
-    tb_disp_draw_text(ctx, status, body_font, 22, outer_x + 20.0, info_top - 68.0, 0.94, 0.96, 0.99);
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.sender"), section_font, 14, outer_x + 20.0, info_top - 118.0, 0.54, 0.62, 0.76);
-    tb_disp_draw_text(ctx, sender, body_font, 20, outer_x + 20.0, info_top - 148.0, 0.94, 0.96, 0.99);
+        const CGFloat sender_x = margin + col_w;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.sender"), title_font, label_size,
+                             sender_x, label_y, 0.557, 0.557, 0.576, TB_ALIGN_LEFT, col_max, label_kern);
+        tb_disp_draw_text_ex(ctx, sender, body_font, 15.0 * s, sender_x, value_y,
+                             0.96, 0.96, 0.97, TB_ALIGN_LEFT, col_max, 0.0);
 
-    const CGFloat display_x = outer_x + card_w + card_gap + 20.0;
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.display"), section_font, 15, display_x, info_top - 34.0, 0.54, 0.62, 0.76);
-    tb_disp_draw_text(ctx, panel, zh ? body_font : mono_font, 20, display_x, info_top - 68.0, 0.94, 0.96, 0.99);
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.stream_profile"), section_font, 14, display_x, info_top - 118.0, 0.54, 0.62, 0.76);
-    tb_disp_draw_text(ctx, mode, zh ? body_font : mono_font, 20, display_x, info_top - 148.0, 0.94, 0.96, 0.99);
+        const CGFloat mode_x = margin + 2.0 * col_w;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.stream_profile"), title_font, label_size,
+                             mode_x, label_y, 0.557, 0.557, 0.576, TB_ALIGN_LEFT, col_max, label_kern);
+        tb_disp_draw_text_ex(ctx, mode, zh ? body_font : mono_font, 14.0 * s, mode_x, value_y,
+                             0.96, 0.96, 0.97, TB_ALIGN_LEFT, col_max, 0.0);
 
-    const CGFloat footer_top = info_top - info_h - 28.0;
-    const CGFloat footer_h = 150.0;
-    tb_disp_fill_rect(ctx, outer_x, footer_top - footer_h, outer_w, footer_h, 0.14, 0.15, 0.19, 1.0);
+        const CGFloat panel_x = margin + 3.0 * col_w;
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.display"), title_font, label_size,
+                             panel_x, label_y, 0.557, 0.557, 0.576, TB_ALIGN_LEFT, col_max, label_kern);
+        tb_disp_draw_text_ex(ctx, panel, zh ? body_font : mono_font, 14.0 * s, panel_x, value_y,
+                             0.96, 0.96, 0.97, TB_ALIGN_LEFT, col_max, 0.0);
 
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.language"), section_font, 15, outer_x + 20.0, footer_top - 32.0, 0.54, 0.62, 0.76);
-    tb_disp_draw_text(ctx, language, body_font, 20, outer_x + 20.0, footer_top - 64.0, 0.94, 0.96, 0.99);
-
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.permissions"), section_font, 15, outer_x + 20.0, footer_top - 102.0, 0.54, 0.62, 0.76);
-    tb_disp_draw_text(ctx, permissions, body_font, 20, outer_x + 20.0, footer_top - 134.0, 0.94, 0.96, 0.99);
-
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.help_1"), body_font, 17, 72, 138, 0.76, 0.80, 0.88);
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.help_2"), body_font, 17, 72, 108, 0.76, 0.80, 0.88);
-    tb_disp_draw_text(ctx, tb_i18n_get("receiver.ui.help_4"), body_font, 17, 72, 78, 0.76, 0.80, 0.88);
+        const CGFloat right_x = w - margin;
+        char version_line[96];
+        snprintf(version_line, sizeof(version_line), "%s · %s", TB_RECEIVER_VERSION, TB_RECEIVER_BUILD);
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.language"), title_font, label_size,
+                             right_x, label_y, 0.557, 0.557, 0.576, TB_ALIGN_RIGHT, col_max, label_kern);
+        tb_disp_draw_text_ex(ctx, language, body_font, 15.0 * s, right_x, value_y,
+                             0.96, 0.96, 0.97, TB_ALIGN_RIGHT, col_max, 0.0);
+        tb_disp_draw_text_ex(ctx, tb_i18n_get("receiver.ui.help_4"), body_font, 13.0 * s, right_x, value_y + 24.0 * s,
+                             0.557, 0.557, 0.576, TB_ALIGN_RIGHT, col_max, 0.0);
+        tb_disp_draw_text_ex(ctx, version_line, mono_font, 12.0 * s, right_x, value_y + 46.0 * s,
+                             0.557, 0.557, 0.576, TB_ALIGN_RIGHT, col_max, 0.0);
     }
 
     CGContextRelease(ctx);
@@ -630,6 +862,7 @@ void tb_disp_destroy(struct tb_display *d) {
         d->system_cursor_hidden = 0;
     }
     tb_disp_destroy_status_texture(d);
+    if (d->app_icon) CGImageRelease(d->app_icon);
     if (d->tex) SDL_DestroyTexture(d->tex);
     if (d->ren) SDL_DestroyRenderer(d->ren);
     if (d->win) SDL_DestroyWindow(d->win);
@@ -1405,6 +1638,7 @@ int tb_disp_window_on_active_space(struct tb_display *d) {
 
 void tb_disp_render_status(struct tb_display *d,
                            const char *ip,
+                           const char *address_label,
                            const char *status,
                            const char *sender,
                            const char *panel,
@@ -1416,6 +1650,7 @@ void tb_disp_render_status(struct tb_display *d,
     tb_disp_set_connection_state(d, 0);
 
     if (!ip) ip = tb_i18n_get("receiver.network.not_detected");
+    if (!address_label) address_label = tb_i18n_get("receiver.ui.ip_thunderbolt_bridge");
     if (!status) status = tb_i18n_get("receiver.status.waiting_for_sender");
     if (!sender) sender = tb_i18n_get("receiver.status.waiting");
     if (!panel) panel = tb_i18n_get("receiver.panel.unknown");
@@ -1431,6 +1666,7 @@ void tb_disp_render_status(struct tb_display *d,
     }
 
     if (strcmp(d->last_ip, ip) != 0 ||
+        strcmp(d->last_address_label, address_label) != 0 ||
         strcmp(d->last_status, status) != 0 ||
         strcmp(d->last_sender, sender) != 0 ||
         strcmp(d->last_panel, panel) != 0 ||
@@ -1442,6 +1678,7 @@ void tb_disp_render_status(struct tb_display *d,
         d->status_tex == NULL ||
         d->status_is_connecting) {
         snprintf(d->last_ip, sizeof(d->last_ip), "%s", ip);
+        snprintf(d->last_address_label, sizeof(d->last_address_label), "%s", address_label);
         snprintf(d->last_status, sizeof(d->last_status), "%s", status);
         snprintf(d->last_sender, sizeof(d->last_sender), "%s", sender);
         snprintf(d->last_panel, sizeof(d->last_panel), "%s", panel);
@@ -1451,7 +1688,7 @@ void tb_disp_render_status(struct tb_display *d,
         d->last_drawable_w = drawable_w;
         d->last_drawable_h = drawable_h;
         d->status_is_connecting = 0;
-        tb_disp_rebuild_status_texture(d, ip, status, sender, panel, mode, language, permissions,
+        tb_disp_rebuild_status_texture(d, ip, address_label, status, sender, panel, mode, language, permissions,
                                        drawable_w, drawable_h, 0);
     }
 
@@ -1484,7 +1721,7 @@ void tb_disp_render_connecting(struct tb_display *d) {
         d->last_drawable_w = drawable_w;
         d->last_drawable_h = drawable_h;
         d->status_is_connecting = 1;
-        tb_disp_rebuild_status_texture(d, "", "", "", "", "", "", "",
+        tb_disp_rebuild_status_texture(d, "", "", "", "", "", "", "", "",
                                        drawable_w, drawable_h, 1);
     }
 
