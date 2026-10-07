@@ -1,38 +1,43 @@
+import AppKit
 import SwiftUI
 
 struct TBDisplaySenderContentView: View {
     @ObservedObject var service: TBDisplaySenderService
     @State private var showingAbout = false
+    @State private var selectedSessionID: UUID?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                headerCard
-                controlDeck
-
-                ForEach(service.sessions) { session in
-                    TBDisplaySenderSessionCard(service: service, session: session)
-                }
-
-                HStack {
-                    Spacer()
-                    Text("\(TBDisplaySenderL10n.versionLabel(service.language)) \(TBDisplaySenderBuildInfo.versionDisplay)")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+        NavigationSplitView {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 340)
+        } detail: {
+            detail
         }
-        .background(Color.black.opacity(0.02))
+        .navigationTitle(TBDisplaySenderL10n.appName(service.language))
         .task {
             service.refreshLocalInterfaces()
+        }
+        .onAppear {
+            normalizeSelection()
+        }
+        .onChange(of: service.sessions.map(\.id)) { oldIDs, newIDs in
+            // Follow a newly added session; otherwise keep a valid selection.
+            if let added = newIDs.last(where: { !oldIDs.contains($0) }) {
+                selectedSessionID = added
+            } else {
+                normalizeSelection()
+            }
         }
         .sheet(isPresented: $showingAbout) {
             TBDisplaySenderAboutView(service: service)
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button(TBDisplaySenderL10n.stopAllButton(service.language)) {
+                    service.stopAll()
+                }
+                .disabled(!service.anyConnected)
+
                 Button {
                     showingAbout = true
                 } label: {
@@ -46,118 +51,117 @@ struct TBDisplaySenderContentView: View {
         }
     }
 
-    private var headerCard: some View {
-        SurfaceCard {
-            HStack(alignment: .top, spacing: 16) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.green.opacity(0.28),
-                                    Color.cyan.opacity(0.12)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    Image(systemName: "display.2")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.92))
-                }
-                .frame(width: 58, height: 58)
+    // MARK: Sidebar
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(TBDisplaySenderL10n.appName(service.language))
-                        .font(.system(size: 31, weight: .bold, design: .rounded))
-                    Text(TBDisplaySenderL10n.appSubtitle(service.language))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+    private var sidebar: some View {
+        List(selection: $selectedSessionID) {
+            Section {
+                ForEach(service.sessions) { session in
+                    TBSessionSidebarRow(service: service, session: session)
+                        .tag(Optional(session.id))
                 }
 
-                Spacer(minLength: 16)
-
-                VStack(alignment: .trailing, spacing: 8) {
-                    statusChip(
-                        service.summaryStatusText(),
-                        tint: service.anyStreaming ? .green : .secondary
-                    )
-                    Text(service.localInterfaceSummaryText)
-                        .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
+                Button(TBDisplaySenderL10n.addSessionButton(service.language)) {
+                    service.addSession()
                 }
+                .buttonStyle(.borderless)
+            } header: {
+                Text(TBDisplaySenderL10n.connectionGroup(service.language))
+            } footer: {
+                Text(TBDisplaySenderL10n.multiSessionHint(service.language))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        }
-    }
 
-    private var controlDeck: some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        sectionHeading(TBDisplaySenderL10n.connectionGroup(service.language))
-                        Text(TBDisplaySenderL10n.multiSessionHint(service.language))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    HStack(spacing: 10) {
-                        Button(TBDisplaySenderL10n.addSessionButton(service.language)) {
-                            service.addSession()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button(TBDisplaySenderL10n.refreshIPButton(service.language)) {
-                            service.refreshLocalInterfaces()
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button(TBDisplaySenderL10n.stopAllButton(service.language)) {
-                            service.stopAll()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(!service.anyConnected)
-                    }
-                }
-
-                SurfaceSubcard {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(TBDisplaySenderL10n.availableLocalInterfaces(service.language))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(service.localInterfaceSummaryText)
-                            .font(.system(.body, design: .monospaced))
+            Section {
+                if service.localInterfaces.isEmpty {
+                    Text(TBDisplaySenderL10n.notDetected(service.language))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(service.localInterfaces) { localInterface in
+                        Text(localInterface.displayText(service.language))
+                            .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+
+                Button(TBDisplaySenderL10n.refreshIPButton(service.language)) {
+                    service.refreshLocalInterfaces()
+                }
+                .buttonStyle(.borderless)
+            } header: {
+                Text(TBDisplaySenderL10n.availableLocalInterfaces(service.language))
             }
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            sidebarHeader
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            sidebarFooter
         }
     }
 
-    private func sectionHeading(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(.caption, design: .rounded, weight: .bold))
-            .tracking(1.1)
-            .foregroundStyle(.secondary)
+    private var sidebarHeader: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .frame(width: 40, height: 40)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(TBDisplaySenderL10n.appName(service.language))
+                    .font(.headline)
+                Text(TBDisplaySenderL10n.appSubtitle(service.language))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
-    private func statusChip(_ text: String, tint: Color) -> some View {
-        Text(text)
-            .font(.system(.footnote, design: .rounded, weight: .bold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(tint.opacity(0.12))
+    private var sidebarFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TBStatusBadge(
+                text: service.summaryStatusText(),
+                tint: service.anyStreaming ? .green : .secondary
             )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(tint.opacity(0.28), lineWidth: 1)
-            )
+            Text("\(TBDisplaySenderL10n.versionLabel(service.language)) \(TBDisplaySenderBuildInfo.versionDisplay)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: Detail
+
+    @ViewBuilder
+    private var detail: some View {
+        if let session = selectedSession {
+            TBDisplaySenderSessionDetail(service: service, session: session)
+                .id(session.id)
+        } else {
+            Text(TBDisplaySenderL10n.notDetected(service.language))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var selectedSession: TBDisplaySenderSession? {
+        service.sessions.first(where: { $0.id == selectedSessionID }) ?? service.sessions.first
+    }
+
+    private func normalizeSelection() {
+        if selectedSessionID == nil || !service.sessions.contains(where: { $0.id == selectedSessionID }) {
+            selectedSessionID = service.sessions.first?.id
+        }
     }
 
     private var settingsToolbarTitle: String {
@@ -181,51 +185,99 @@ struct TBDisplaySenderContentView: View {
     }
 }
 
-private struct TBDisplaySenderSessionCard: View {
+/// One session in the sidebar: its title and live state.
+private struct TBSessionSidebarRow: View {
+    @ObservedObject var service: TBDisplaySenderService
+    @ObservedObject var session: TBDisplaySenderSession
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(service.sessionTitle(for: session))
+            Spacer(minLength: 8)
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(stateTint)
+                    .frame(width: 7, height: 7)
+                Text(stateText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var stateText: String {
+        if session.isStreaming { return TBDisplaySenderL10n.statusChipLive(service.language) }
+        if session.isConnected { return TBDisplaySenderL10n.statusChipConnected(service.language) }
+        return TBDisplaySenderL10n.statusChipIdle(service.language)
+    }
+
+    private var stateTint: Color {
+        if session.isStreaming { return .green }
+        if session.isConnected { return .orange }
+        return .secondary
+    }
+}
+
+private struct TBDisplaySenderSessionDetail: View {
     @ObservedObject var service: TBDisplaySenderService
     @ObservedObject var session: TBDisplaySenderSession
     @State private var showingSessionSettings = false
 
-    private let summaryColumns = [
-        GridItem(.adaptive(minimum: 180), spacing: 12)
-    ]
-
     var body: some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: 16) {
-                topBar
-                summaryGrid
-                if session.isConnected {
-                    brightnessCard
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+
+                if showingSessionSettings {
+                    TBDisplaySenderSessionSettingsPanel(service: service, session: session)
+                } else {
+                    summaryStrip
+                    if session.isConnected {
+                        controlsSection
+                    }
+                    monitorDetailsSection
                 }
-                if session.isConnected && session.audioEnabled {
-                    volumeCard
-                }
-                monitorDetailsCard
             }
-        }
-        .sheet(isPresented: $showingSessionSettings) {
-            TBDisplaySenderSessionSettingsSheet(service: service, session: session)
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
-    private var topBar: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
+    private var header: some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(service.sessionTitle(for: session))
-                        .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    Text(session.statusText)
-                        .font(.subheadline)
-                        .foregroundStyle(session.isStreaming ? .green : .secondary)
+                        .font(.largeTitle.weight(.bold))
+                    TBStatusBadge(text: chipText, tint: chipTint)
                 }
-
-                Spacer(minLength: 12)
-
-                statusChip
+                Text(showingSessionSettings ? settingsSubtitle : session.statusText)
+                    .font(.callout)
+                    .foregroundStyle(!showingSessionSettings && session.isStreaming ? .green : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 10) {
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                Button(TBDisplaySenderL10n.removeSessionButton(service.language)) {
+                    service.removeSession(session)
+                }
+                .tbButtonStyle()
+                .disabled(service.sessions.count == 1 || session.isConnected || session.isStreaming)
+
+                Button {
+                    showingSessionSettings.toggle()
+                } label: {
+                    Label(
+                        showingSessionSettings
+                            ? TBDisplaySenderL10n.hideSettings(service.language)
+                            : TBDisplaySenderL10n.showSettings(service.language),
+                        systemImage: "gearshape.2"
+                    )
+                }
+                .tbButtonStyle()
+
                 Button(session.isConnected ? TBDisplaySenderL10n.stopButton(service.language) : TBDisplaySenderL10n.connectButton(service.language)) {
                     if session.isConnected {
                         session.stop()
@@ -233,140 +285,144 @@ private struct TBDisplaySenderSessionCard: View {
                         session.connect()
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .tbButtonStyle(prominent: true)
                 .disabled(!session.isConnected && (trimmedReceiverIP.isEmpty || session.localInterfaceIP.isEmpty))
-
-                Button {
-                    showingSessionSettings = true
-                } label: {
-                    Label(TBDisplaySenderL10n.showSettings(service.language), systemImage: "gearshape.2")
-                }
-                .buttonStyle(.bordered)
-
-                Button(TBDisplaySenderL10n.removeSessionButton(service.language)) {
-                    service.removeSession(session)
-                }
-                .buttonStyle(.bordered)
-                .disabled(service.sessions.count == 1 || session.isConnected || session.isStreaming)
             }
         }
     }
 
-    private var summaryGrid: some View {
-        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-            summaryTile(
+    private var summaryStrip: some View {
+        HStack(alignment: .top, spacing: 0) {
+            summaryCell(
                 title: transportTitle,
                 value: session.transportKind.title(service.language),
                 subtitle: service.interfaceDisplayText(for: session.localInterfaceIP)
             )
-
-            summaryTile(
+            Divider()
+            summaryCell(
                 title: receiverTitle,
                 value: session.receiverDisplayName.isEmpty ? TBDisplaySenderL10n.notDetected(service.language) : session.receiverDisplayName,
                 subtitle: session.receiverSubtitle
             )
-
-            summaryTile(
+            Divider()
+            summaryCell(
                 title: sourceTitle,
                 value: session.captureSource.title(service.language),
                 subtitle: session.streamResolutionText
             )
-
-            summaryTile(
+            Divider()
+            summaryCell(
                 title: fpsTitle,
                 value: "\(session.senderFPS)",
                 subtitle: session.isStreaming ? liveSubtitle : idleSubtitle,
-                accent: session.isStreaming ? .green : .secondary
+                accent: session.isStreaming ? .green : .primary
             )
         }
+        .fixedSize(horizontal: false, vertical: true)
+        .background(.quinary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 
-    private var monitorDetailsCard: some View {
-        SurfaceSubcard {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeading(sessionMonitorTitle)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    infoRow(TBDisplaySenderL10n.receiverLabel(service.language), session.receiverPanelText)
-                    infoRow(TBDisplaySenderL10n.virtualDisplayLabel(service.language), session.virtualDisplayText)
-                    infoRow(TBDisplaySenderL10n.streamLabel(service.language), session.streamResolutionText)
-                    infoRow(TBDisplaySenderL10n.fpsLabel(service.language), "\(session.senderFPS)")
-                }
-            }
+    private func summaryCell(title: String, value: String, subtitle: String, accent: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(accent)
+                .lineLimit(2)
+                .textSelection(.enabled)
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .textSelection(.enabled)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    private var brightnessCard: some View {
-        SurfaceSubcard {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeading(brightnessTitle)
-                HStack(spacing: 12) {
-                    Image(systemName: "sun.min.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary)
-
-                    Slider(value: $session.brightness, in: 0.0...1.0)
-                        .tint(.orange)
-
-                    Image(systemName: "sun.max.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary)
-
-                    Text("\(Int((session.brightness * 100).rounded()))%")
-                        .font(.system(.body, design: .monospaced))
-                        .frame(width: 44, alignment: .trailing)
-                        .foregroundStyle(.secondary)
-                }
+    private var controlsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sliderRow(
+                title: brightnessTitle,
+                value: $session.brightness,
+                lowSymbol: "sun.min.fill",
+                highSymbol: "sun.max.fill",
+                tint: .orange
+            )
+            if session.audioEnabled {
+                Divider().padding(.leading, 14)
+                sliderRow(
+                    title: volumeTitle,
+                    value: $session.volume,
+                    lowSymbol: "speaker.fill",
+                    highSymbol: "speaker.wave.3.fill",
+                    tint: .accentColor
+                )
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quinary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 
-    private var volumeCard: some View {
-        SurfaceSubcard {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeading(volumeTitle)
-                HStack(spacing: 12) {
-                    Image(systemName: "speaker.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary)
-
-                    Slider(value: $session.volume, in: 0.0...1.0)
-                        .tint(.blue)
-
-                    Image(systemName: "speaker.wave.3.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary)
-
-                    Text("\(Int((session.volume * 100).rounded()))%")
-                        .font(.system(.body, design: .monospaced))
-                        .frame(width: 44, alignment: .trailing)
-                        .foregroundStyle(.secondary)
-                }
-            }
+    private func sliderRow(title: String, value: Binding<Double>, lowSymbol: String, highSymbol: String, tint: Color) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .frame(width: 110, alignment: .leading)
+            Image(systemName: lowSymbol)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Slider(value: value, in: 0.0...1.0)
+                .tint(tint)
+                .accessibilityLabel(title)
+            Image(systemName: highSymbol)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text("\(Int((value.wrappedValue * 100).rounded()))%")
+                .font(.body.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 48, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var monitorDetailsSection: some View {
+        TBGroupedSection(title: sessionMonitorTitle) {
+            infoRow(TBDisplaySenderL10n.receiverLabel(service.language), session.receiverPanelText)
+            Divider().padding(.leading, 14)
+            infoRow(TBDisplaySenderL10n.virtualDisplayLabel(service.language), session.virtualDisplayText)
+            Divider().padding(.leading, 14)
+            infoRow(TBDisplaySenderL10n.streamLabel(service.language), session.streamResolutionText)
+            Divider().padding(.leading, 14)
+            infoRow(TBDisplaySenderL10n.fpsLabel(service.language), "\(session.senderFPS)")
+        }
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(label)
+            Spacer(minLength: 12)
+            Text(value)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     private var trimmedReceiverIP: String {
         session.receiverIP.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var statusChip: some View {
-        Text(chipText)
-            .font(.system(.footnote, design: .rounded, weight: .bold))
-            .foregroundStyle(chipTint)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(chipTint.opacity(0.12))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(chipTint.opacity(0.28), lineWidth: 1)
-            )
     }
 
     private var chipText: String {
@@ -381,29 +437,13 @@ private struct TBDisplaySenderSessionCard: View {
         return .secondary
     }
 
-    private func sectionHeading(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(.caption, design: .rounded, weight: .bold))
-            .tracking(1.0)
-            .foregroundStyle(.secondary)
-    }
-
-    private func summaryTile(title: String, value: String, subtitle: String, accent: Color = .primary) -> some View {
-        SurfaceSubcard {
-            VStack(alignment: .leading, spacing: 8) {
-                sectionHeading(title)
-                Text(value)
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(accent)
-                    .lineLimit(2)
-                    .textSelection(.enabled)
-                Text(subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+    private var settingsSubtitle: String {
+        switch service.language {
+        case .italian: return "Configura trasporto, output e diagnostica senza sporcare la dashboard principale."
+        case .english: return "Configure transport, output, and diagnostics without cluttering the main dashboard."
+        case .german: return "Transport, Ausgabe und Diagnose konfigurieren, ohne das Haupt-Dashboard zu überladen."
+        case .french: return "Configurez le transport, la sortie et le diagnostic sans encombrer le tableau de bord principal."
+        case .chinese: return "在不干扰主控制面板的情况下配置传输、输出和诊断。"
         }
     }
 
@@ -508,329 +548,325 @@ private struct TBDisplaySenderSessionCard: View {
     private var idleTitle: String {
         TBDisplaySenderL10n.statusChipIdle(service.language)
     }
-
-    private func infoRow(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Text(label)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 138, alignment: .leading)
-            Text(value)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
 }
 
-private struct TBDisplaySenderSessionSettingsSheet: View {
+private struct TBDisplaySenderSessionSettingsPanel: View {
     @ObservedObject var service: TBDisplaySenderService
     @ObservedObject var session: TBDisplaySenderSession
-    @Environment(\.dismiss) private var dismiss
     @State private var configurationChecks: [TBConfigurationCheck] = []
+    @State private var panelWidth: CGFloat = 0
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-
-                settingsSection(title: connectionSettingsTitle) {
-                    settingRow(TBDisplaySenderL10n.transportKind(service.language), details: transportDetails) {
-                        Picker(TBDisplaySenderL10n.transportKind(service.language), selection: $session.transportKind) {
-                            ForEach(service.availableTransportKinds) { transportKind in
-                                Text(transportKind.title(service.language)).tag(transportKind)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .onChange(of: session.transportKind) { _, _ in
-                            service.transportDidChange(for: session)
-                        }
-                        .disabled(session.isConnected || session.isStreaming)
+        Group {
+            if panelWidth >= 860 {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        connectionSection
+                        diagnosticsSection
                     }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                    settingRow(TBDisplaySenderL10n.localInterfaceIP(service.language), details: localInterfaceDetails) {
-                        Picker(TBDisplaySenderL10n.localInterfaceIP(service.language), selection: $session.localInterfaceIP) {
-                            Text(TBDisplaySenderL10n.notDetected(service.language)).tag("")
-                            ForEach(service.availableInterfaces(for: session.transportKind)) { localInterface in
-                                Text(localInterface.displayText(service.language)).tag(localInterface.ip)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .onChange(of: session.localInterfaceIP) { _, _ in
-                            service.localInterfaceDidChange(for: session)
-                        }
-                        .disabled(session.isConnected || session.isStreaming)
-                    }
+                    outputSection
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 16) {
+                    connectionSection
+                    outputSection
+                    diagnosticsSection
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            panelWidth = width
+        }
+    }
 
-                    settingRow(TBDisplaySenderL10n.discoveredReceiver(service.language), details: discoveryDetails) {
-                        Picker(TBDisplaySenderL10n.discoveredReceiver(service.language), selection: $session.selectedReceiverID) {
-                            Text(TBDisplaySenderL10n.manualReceiverEntry(service.language)).tag("")
-                            ForEach(service.discoveredReceivers) { receiver in
-                                Text(receiver.displayText).tag(receiver.id)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .onChange(of: session.selectedReceiverID) { _, newValue in
-                            guard let receiver = service.discoveredReceivers.first(where: { $0.id == newValue }) else { return }
-                            service.applyDiscoveredReceiver(receiver, to: session)
-                        }
-                        .disabled(session.isConnected || session.isStreaming)
-                    }
-
-                    settingRow(TBDisplaySenderL10n.receiverIP(service.language), details: receiverDetails) {
-                        TextField("169.254.x.x / 192.168.x.x", text: $session.receiverIP)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.body, design: .monospaced))
-                            .disabled(session.isConnected || session.isStreaming)
+    private var connectionSection: some View {
+        settingsSection(title: connectionSettingsTitle) {
+            settingRow(TBDisplaySenderL10n.transportKind(service.language), details: transportDetails) {
+                Picker(TBDisplaySenderL10n.transportKind(service.language), selection: $session.transportKind) {
+                    ForEach(service.availableTransportKinds) { transportKind in
+                        Text(transportKind.title(service.language)).tag(transportKind)
                     }
                 }
-
-                settingsSection(title: outputSettingsTitle) {
-                    settingRow(TBDisplaySenderL10n.displayProfiles(service.language), details: TBDisplaySenderL10n.displayProfilesHint(service.language)) {
-                        HStack(spacing: 8) {
-                            ForEach(TBDisplayProfile.allCases) { profile in
-                                Button(TBDisplaySenderL10n.displayProfileTitle(profile, language: service.language)) {
-                                    service.applyDisplayProfile(profile, to: session)
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(session.isConnected || session.isStreaming)
-                            }
-                        }
-                    }
-
-                    settingRow(TBDisplaySenderL10n.captureSource(service.language), details: captureModeDetails) {
-                        Picker(TBDisplaySenderL10n.captureSource(service.language), selection: $session.captureSource) {
-                            ForEach(TBDisplayCaptureSource.allCases) { source in
-                                Text(source.title(service.language)).tag(source)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .disabled(session.isConnected || session.isStreaming)
-                    }
-
-                    settingRow(TBDisplaySenderL10n.streamProfile(service.language), details: streamProfileDetails) {
-                        Picker(TBDisplaySenderL10n.streamProfile(service.language), selection: $session.capturePreset) {
-                            ForEach(TBDisplayCapturePreset.allCases, id: \.self) { preset in
-                                Text("\(preset.title(service.language)) · \(preset.description)").tag(preset)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .disabled(session.isConnected || session.isStreaming)
-                    }
-
-                    if session.captureSource == .extendedDesktop {
-                        settingRow(renderMatchingTitle, details: renderMatchingDetails) {
-                            Toggle("", isOn: $session.matchRenderToStream)
-                                .labelsHidden()
-                                .disabled(session.isConnected || session.isStreaming)
-                        }
-                    }
-
-                    if service.audioRelayAvailable {
-                        settingRow(TBDisplaySenderL10n.streamAudio(service.language), details: audioDetails) {
-                            Toggle("", isOn: $session.audioEnabled)
-                                .labelsHidden()
-                                .disabled(session.isConnected || session.isStreaming)
-                        }
-                    }
-
-                    if service.inputDockstationAvailable {
-                        settingRow(inputDockstationTitle, details: inputDockstationDetails) {
-                            Picker(
-                                inputDockstationTitle,
-                                selection: Binding(
-                                    get: { session.inputControlRole },
-                                    set: { service.setInputControlRole($0, for: session) }
-                                )
-                            ) {
-                                ForEach(TBInputControlRole.allCases) { role in
-                                    Text(inputControlRoleTitle(role)).tag(role)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .disabled(!session.isConnected)
-                        }
-
-                        if session.inputControlRole == .senderMaster {
-                            settingRow(inputGestureModeTitle, details: inputGestureModeDetails) {
-                                Picker(
-                                    inputGestureModeTitle,
-                                    selection: $session.inputGestureMode
-                                ) {
-                                    ForEach(TBInputGestureMode.allCases) { mode in
-                                        Text(inputGestureModeOptionTitle(mode)).tag(mode)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .disabled(!session.isConnected)
-                            }
-                        }
-
-                        if session.inputControlRole == .receiverMaster {
-                            SurfaceSubcard {
-                                TBInputBindingsView(session: session, language: service.language)
-                            }
-                        }
-
-                        if session.inputControlRole == .senderMaster, !service.localInputMonitoringTrusted {
-                            SurfaceSubcard {
-                                permissionWarningCard(
-                                    title: localInputMonitoringWarningTitle,
-                                    body: localInputMonitoringWarningBody,
-                                    actionTitle: openInputMonitoringSettingsTitle,
-                                    action: { service.openInputMonitoringSettings() },
-                                    statusText: "listen=false"
-                                )
-                            }
-                        }
-
-                        if session.inputControlRole == .senderMaster, session.receiverAccessibilityTrustedHint == false {
-                            SurfaceSubcard {
-                                permissionWarningCard(
-                                    title: receiverAccessibilityWarningTitle,
-                                    body: receiverAccessibilityWarningBody,
-                                    actionTitle: nil,
-                                    action: nil,
-                                    statusText: "receiver accessibility=false"
-                                )
-                            }
-                        }
-
-                        if session.inputControlRole == .receiverMaster, !service.localInputInjectionTrusted {
-                            SurfaceSubcard {
-                                permissionWarningCard(
-                                    title: inputPermissionWarningTitle,
-                                    body: inputPermissionWarningBody,
-                                    actionTitle: openAccessibilitySettingsTitle,
-                                    action: { service.openAccessibilitySettings() },
-                                    statusText: inputPermissionStatusText
-                                )
-                            }
-                        }
-
-                        if session.inputControlRole == .receiverMaster, session.receiverInputMonitoringTrustedHint == false {
-                            SurfaceSubcard {
-                                permissionWarningCard(
-                                    title: receiverInputMonitoringWarningTitle,
-                                    body: receiverInputMonitoringWarningBody,
-                                    actionTitle: nil,
-                                    action: nil,
-                                    statusText: "receiver input-monitoring=false"
-                                )
-                            }
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(TBDisplaySenderL10n.streamHint1(service.language))
-                        Text(TBDisplaySenderL10n.streamHint2(service.language))
-                            .foregroundStyle(.secondary)
-
-                        if !service.discoveredReceivers.isEmpty {
-                            Text(TBDisplaySenderL10n.discoveryHint(service.language))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.footnote)
-                    .fixedSize(horizontal: false, vertical: true)
+                .pickerStyle(.menu)
+                .onChange(of: session.transportKind) { _, _ in
+                    service.transportDidChange(for: session)
                 }
+                .disabled(session.isConnected || session.isStreaming)
+            }
 
-                settingsSection(title: diagnosticsTitle) {
-                    SurfaceSubcard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(TBDisplaySenderL10n.text("sender.diagnostics.guided_title", service.language))
-                                        .font(.subheadline.weight(.semibold))
-                                    Text(TBDisplaySenderL10n.text("sender.diagnostics.guided_hint", service.language))
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                Spacer()
-                                Button(TBDisplaySenderL10n.text("sender.diagnostics.check_configuration", service.language)) {
-                                    configurationChecks = service.configurationChecks(for: session)
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
+            settingRow(TBDisplaySenderL10n.localInterfaceIP(service.language), details: localInterfaceDetails) {
+                Picker(TBDisplaySenderL10n.localInterfaceIP(service.language), selection: $session.localInterfaceIP) {
+                    Text(TBDisplaySenderL10n.notDetected(service.language)).tag("")
+                    ForEach(service.availableInterfaces(for: session.transportKind)) { localInterface in
+                        Text(localInterface.displayText(service.language)).tag(localInterface.ip)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: session.localInterfaceIP) { _, _ in
+                    service.localInterfaceDidChange(for: session)
+                }
+                .disabled(session.isConnected || session.isStreaming)
+            }
 
-                            if !configurationChecks.isEmpty {
-                                Divider().overlay(Color.white.opacity(0.08))
-                                VStack(alignment: .leading, spacing: 10) {
-                                    ForEach(configurationChecks) { check in
-                                        configurationCheckRow(check)
-                                    }
-                                }
-                            }
+            settingRow(TBDisplaySenderL10n.discoveredReceiver(service.language), details: discoveryDetails) {
+                Picker(TBDisplaySenderL10n.discoveredReceiver(service.language), selection: $session.selectedReceiverID) {
+                    Text(TBDisplaySenderL10n.manualReceiverEntry(service.language)).tag("")
+                    ForEach(service.discoveredReceivers) { receiver in
+                        Text(receiver.displayText).tag(receiver.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: session.selectedReceiverID) { _, newValue in
+                    guard let receiver = service.discoveredReceivers.first(where: { $0.id == newValue }) else { return }
+                    service.applyDiscoveredReceiver(receiver, to: session)
+                }
+                .disabled(session.isConnected || session.isStreaming)
+            }
 
-                            Divider().overlay(Color.white.opacity(0.08))
+            settingRow(TBDisplaySenderL10n.receiverIP(service.language), details: receiverDetails) {
+                TextField("169.254.x.x / 192.168.x.x", text: $session.receiverIP)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .disabled(session.isConnected || session.isStreaming)
+            }
+        }
+    }
 
-                            HStack(spacing: 12) {
-                                Button(action: {
-                                    session.startCableTest()
-                                }) {
-                                    HStack(spacing: 6) {
-                                        if session.isCableTesting {
-                                            ProgressView()
-                                                .progressViewStyle(.circular)
-                                                .controlSize(.small)
-                                        }
-                                        Text(session.isCableTesting ? TBDisplaySenderL10n.testingButton(service.language) : TBDisplaySenderL10n.cableTestButton(service.language))
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(session.isConnected || session.isStreaming || session.isCableTesting || trimmedReceiverIP.isEmpty || session.localInterfaceIP.isEmpty)
-
-                                Text(cableRateText)
-                                    .font(.system(.body, design: .rounded, weight: .semibold))
-                                    .foregroundStyle(cableRateColor)
-
-                                Spacer()
-
-                                Button(TBDisplaySenderL10n.restartCaptureButton(service.language)) {
-                                    session.restartCaptureNow()
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(!session.canRestartCapture)
-                            }
-
-                            Divider().overlay(Color.white.opacity(0.08))
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                infoRow("Capture", session.captureDisplayText)
-                                infoRow("State", session.displayStateText)
-                            }
+    private var outputSection: some View {
+        settingsSection(title: outputSettingsTitle) {
+            settingRow(TBDisplaySenderL10n.displayProfiles(service.language), details: TBDisplaySenderL10n.displayProfilesHint(service.language)) {
+                HStack(spacing: 8) {
+                    ForEach(TBDisplayProfile.allCases) { profile in
+                        Button(TBDisplaySenderL10n.displayProfileTitle(profile, language: service.language)) {
+                            service.applyDisplayProfile(profile, to: session)
                         }
+                        .tbButtonStyle()
+                        .disabled(session.isConnected || session.isStreaming)
                     }
                 }
             }
-            .padding(24)
-            .padding(.top, 14)
+
+            settingRow(TBDisplaySenderL10n.captureSource(service.language), details: captureModeDetails) {
+                Picker(TBDisplaySenderL10n.captureSource(service.language), selection: $session.captureSource) {
+                    ForEach(TBDisplayCaptureSource.allCases) { source in
+                        Text(source.title(service.language)).tag(source)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(session.isConnected || session.isStreaming)
+            }
+
+            settingRow(TBDisplaySenderL10n.streamProfile(service.language), details: streamProfileDetails) {
+                Picker(TBDisplaySenderL10n.streamProfile(service.language), selection: $session.capturePreset) {
+                    ForEach(TBDisplayCapturePreset.allCases, id: \.self) { preset in
+                        Text("\(preset.title(service.language)) · \(preset.description)").tag(preset)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(session.isConnected || session.isStreaming)
+            }
+
+            if session.captureSource == .extendedDesktop {
+                settingRow(renderMatchingTitle, details: renderMatchingDetails) {
+                    Toggle("", isOn: $session.matchRenderToStream)
+                        .labelsHidden()
+                        .disabled(session.isConnected || session.isStreaming)
+                }
+            }
+
+            if service.audioRelayAvailable {
+                settingRow(TBDisplaySenderL10n.streamAudio(service.language), details: audioDetails) {
+                    Toggle("", isOn: $session.audioEnabled)
+                        .labelsHidden()
+                        .disabled(session.isConnected || session.isStreaming)
+                }
+            }
+
+            if service.inputDockstationAvailable {
+                settingRow(inputDockstationTitle, details: inputDockstationDetails) {
+                    Picker(
+                        inputDockstationTitle,
+                        selection: Binding(
+                            get: { session.inputControlRole },
+                            set: { service.setInputControlRole($0, for: session) }
+                        )
+                    ) {
+                        ForEach(TBInputControlRole.allCases) { role in
+                            Text(inputControlRoleTitle(role)).tag(role)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(!session.isConnected)
+                }
+
+                if session.inputControlRole == .senderMaster {
+                    settingRow(inputGestureModeTitle, details: inputGestureModeDetails) {
+                        Picker(
+                            inputGestureModeTitle,
+                            selection: $session.inputGestureMode
+                        ) {
+                            ForEach(TBInputGestureMode.allCases) { mode in
+                                Text(inputGestureModeOptionTitle(mode)).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .disabled(!session.isConnected)
+                    }
+                }
+
+                if session.inputControlRole == .receiverMaster {
+                    SurfaceSubcard {
+                        TBInputBindingsView(session: session, language: service.language)
+                    }
+                }
+
+                if session.inputControlRole == .senderMaster, !service.localInputMonitoringTrusted {
+                    SurfaceSubcard {
+                        permissionWarningCard(
+                            title: localInputMonitoringWarningTitle,
+                            body: localInputMonitoringWarningBody,
+                            actionTitle: openInputMonitoringSettingsTitle,
+                            action: { service.openInputMonitoringSettings() },
+                            statusText: "listen=false"
+                        )
+                    }
+                }
+
+                if session.inputControlRole == .senderMaster, session.receiverAccessibilityTrustedHint == false {
+                    SurfaceSubcard {
+                        permissionWarningCard(
+                            title: receiverAccessibilityWarningTitle,
+                            body: receiverAccessibilityWarningBody,
+                            actionTitle: nil,
+                            action: nil,
+                            statusText: "receiver accessibility=false"
+                        )
+                    }
+                }
+
+                if session.inputControlRole == .receiverMaster, !service.localInputInjectionTrusted {
+                    SurfaceSubcard {
+                        permissionWarningCard(
+                            title: inputPermissionWarningTitle,
+                            body: inputPermissionWarningBody,
+                            actionTitle: openAccessibilitySettingsTitle,
+                            action: { service.openAccessibilitySettings() },
+                            statusText: inputPermissionStatusText
+                        )
+                    }
+                }
+
+                if session.inputControlRole == .receiverMaster, session.receiverInputMonitoringTrustedHint == false {
+                    SurfaceSubcard {
+                        permissionWarningCard(
+                            title: receiverInputMonitoringWarningTitle,
+                            body: receiverInputMonitoringWarningBody,
+                            actionTitle: nil,
+                            action: nil,
+                            statusText: "receiver input-monitoring=false"
+                        )
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(TBDisplaySenderL10n.streamHint1(service.language))
+                Text(TBDisplaySenderL10n.streamHint2(service.language))
+                    .foregroundStyle(.secondary)
+
+                if !service.discoveredReceivers.isEmpty {
+                    Text(TBDisplaySenderL10n.discoveryHint(service.language))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(width: 720, height: 620)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.12, green: 0.13, blue: 0.14),
-                    Color(red: 0.08, green: 0.09, blue: 0.10)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-        )
-        // The panel uses a fixed dark background, so force the dark color scheme:
-        // otherwise in system Light mode the semantic text colors (.primary /
-        // .secondary) resolve to dark variants and render dark-on-dark.
-        .preferredColorScheme(.dark)
+    }
+
+    private var diagnosticsSection: some View {
+        settingsSection(title: diagnosticsTitle) {
+            SurfaceSubcard {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(TBDisplaySenderL10n.text("sender.diagnostics.guided_title", service.language))
+                                .font(.subheadline.weight(.semibold))
+                            Text(TBDisplaySenderL10n.text("sender.diagnostics.guided_hint", service.language))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Button(TBDisplaySenderL10n.text("sender.diagnostics.check_configuration", service.language)) {
+                            configurationChecks = service.configurationChecks(for: session)
+                        }
+                        .tbButtonStyle(prominent: true)
+                    }
+
+                    if !configurationChecks.isEmpty {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(configurationChecks) { check in
+                                configurationCheckRow(check)
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    HStack(spacing: 12) {
+                        Button(action: {
+                            session.startCableTest()
+                        }) {
+                            HStack(spacing: 6) {
+                                if session.isCableTesting {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .controlSize(.small)
+                                }
+                                Text(session.isCableTesting ? TBDisplaySenderL10n.testingButton(service.language) : TBDisplaySenderL10n.cableTestButton(service.language))
+                            }
+                        }
+                        .tbButtonStyle()
+                        .disabled(session.isConnected || session.isStreaming || session.isCableTesting || trimmedReceiverIP.isEmpty || session.localInterfaceIP.isEmpty)
+
+                        Text(cableRateText)
+                            .font(.system(.body, design: .rounded, weight: .semibold))
+                            .foregroundStyle(cableRateColor)
+
+                        Spacer()
+
+                        Button(TBDisplaySenderL10n.restartCaptureButton(service.language)) {
+                            session.restartCaptureNow()
+                        }
+                        .tbButtonStyle()
+                        .disabled(!session.canRestartCapture)
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        infoRow("Capture", session.captureDisplayText)
+                        infoRow("State", session.displayStateText)
+                    }
+                }
+            }
+        }
     }
 
     private func settingsSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: 12) {
-                sectionHeading(title)
+        TBGroupedSection(title: title) {
+            VStack(alignment: .leading, spacing: 14) {
                 content()
             }
+            .padding(14)
         }
     }
 
@@ -838,8 +874,6 @@ private struct TBDisplaySenderSessionSettingsSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 Spacer()
                 content()
                     .frame(maxWidth: 310, alignment: .trailing)
@@ -850,13 +884,6 @@ private struct TBDisplaySenderSessionSettingsSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func sectionHeading(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(.caption, design: .rounded, weight: .bold))
-            .tracking(1.0)
-            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -886,62 +913,13 @@ private struct TBDisplaySenderSessionSettingsSheet: View {
                     Button(actionTitle) {
                         action()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .tbButtonStyle(prominent: true)
                 }
 
                 Text(statusText)
                     .font(.footnote.monospaced())
                     .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var header: some View {
-        SurfaceCard {
-            HStack(alignment: .top, spacing: 16) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.green.opacity(0.28),
-                                    Color.cyan.opacity(0.12)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.92))
-                }
-                .frame(width: 58, height: 58)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(service.sessionTitle(for: session))
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                    Text(settingsSubtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Button(TBDisplaySenderL10n.hideSettings(service.language)) {
-                    dismiss()
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-    }
-
-    private var settingsSubtitle: String {
-        switch service.language {
-        case .italian: return "Configura trasporto, output e diagnostica senza sporcare la dashboard principale."
-        case .english: return "Configure transport, output, and diagnostics without cluttering the main dashboard."
-        case .german: return "Transport, Ausgabe und Diagnose konfigurieren, ohne das Haupt-Dashboard zu überladen."
-        case .french: return "Configurez le transport, la sortie et le diagnostic sans encombrer le tableau de bord principal."
-        case .chinese: return "在不干扰主控制面板的情况下配置传输、输出和诊断。"
         }
     }
 
