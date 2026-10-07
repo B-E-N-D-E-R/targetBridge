@@ -54,7 +54,15 @@ struct TBDisplaySenderContentView: View {
     // MARK: Sidebar
 
     private var sidebar: some View {
+        // Header and footer are ordinary list rows, not safeAreaInset views:
+        // insets on a split-view sidebar re-enter AppKit's constraint pass
+        // while the sidebar collapses, and AppKit then aborts the app.
+        // Rows without a tag are not selectable.
         List(selection: $selectedSessionID) {
+            Section {
+                sidebarHeader
+            }
+
             Section {
                 ForEach(service.sessions) { session in
                     TBSessionSidebarRow(service: service, session: session)
@@ -65,13 +73,13 @@ struct TBDisplaySenderContentView: View {
                     service.addSession()
                 }
                 .buttonStyle(.borderless)
+                .foregroundStyle(.tint)
             } header: {
                 Text(TBDisplaySenderL10n.connectionGroup(service.language))
             } footer: {
                 Text(TBDisplaySenderL10n.multiSessionHint(service.language))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
@@ -83,7 +91,6 @@ struct TBDisplaySenderContentView: View {
                         Text(localInterface.displayText(service.language))
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
@@ -91,24 +98,23 @@ struct TBDisplaySenderContentView: View {
                     service.refreshLocalInterfaces()
                 }
                 .buttonStyle(.borderless)
+                .foregroundStyle(.tint)
             } header: {
                 Text(TBDisplaySenderL10n.availableLocalInterfaces(service.language))
             }
+
+            Section {
+                sidebarFooter
+            }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            sidebarHeader
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            sidebarFooter
-        }
     }
 
     private var sidebarHeader: some View {
         HStack(alignment: .center, spacing: 10) {
             Image(nsImage: NSApplication.shared.applicationIconImage)
                 .resizable()
-                .frame(width: 40, height: 40)
+                .frame(width: 36, height: 36)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(TBDisplaySenderL10n.appName(service.language))
@@ -116,12 +122,10 @@ struct TBDisplaySenderContentView: View {
                 Text(TBDisplaySenderL10n.appSubtitle(service.language))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(3)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 4)
     }
 
     private var sidebarFooter: some View {
@@ -135,9 +139,7 @@ struct TBDisplaySenderContentView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 4)
     }
 
     // MARK: Detail
