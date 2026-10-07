@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
   push:
-    branches: [ main, catalina-receiver ]
+    branches: [ main, catalina-receiver, ui-refresh ]
     tags: [ 'catalina-v*', 'catalina-test-*' ]
   pull_request:
     paths:
@@ -34,17 +34,24 @@ permissions:
 jobs:
   build-sender:
     name: Build Sender (${{ matrix.arch }})
+    # The macOS 26 SDK (Xcode 26) is what gives the Sender its Liquid Glass
+    # look on macOS 26; it still runs on macOS 14 and 15. There is no Intel
+    # macOS 26 runner, so the Intel Sender is cross-compiled on Apple Silicon
+    # and its tests run under Rosetta.
     strategy:
       matrix:
         include:
-          - os: macos-15-intel
-            arch: x86_64
-          - os: macos-15
-            arch: arm64
-    runs-on: ${{ matrix.os }}
+          - arch: x86_64
+          - arch: arm64
+    runs-on: macos-26
+    env:
+      SENDER_ARCH: ${{ matrix.arch }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
+
+      - name: Show Xcode
+        run: xcodebuild -version
 
       - name: Install Tools
         run: brew install jq xcodegen
@@ -58,7 +65,10 @@ jobs:
       - name: Run Sender Unit Tests
         run: |
           cd TargetBridge-Sender
-          xcodebuild test -project TargetBridge.xcodeproj -scheme TBDisplaySender -destination 'platform=macOS' -derivedDataPath .build/DerivedData
+          xcodebuild test -project TargetBridge.xcodeproj -scheme TBDisplaySender \
+            -destination "platform=macOS,arch=${{ matrix.arch }}" \
+            -derivedDataPath .build/DerivedData \
+            ARCHS="${{ matrix.arch }}" ONLY_ACTIVE_ARCH=NO
 
       - name: Check Sender Permission Probe
         run: ruby TargetBridge-Sender/scripts/test_permission_status.rb sender build/TargetBridge.app/Contents/MacOS/TargetBridge

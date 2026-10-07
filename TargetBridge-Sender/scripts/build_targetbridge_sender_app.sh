@@ -15,6 +15,13 @@ cd "$ROOT"
 
 xcodegen generate
 
+# SENDER_ARCH builds for an architecture other than the host's, e.g. the
+# Intel Sender on an Apple Silicon runner: SENDER_ARCH=x86_64.
+ARCH_SETTINGS=()
+if [[ -n "${SENDER_ARCH:-}" ]]; then
+  ARCH_SETTINGS=(ARCHS="$SENDER_ARCH" ONLY_ACTIVE_ARCH=NO)
+fi
+
 xcodebuild \
   -scheme TBDisplaySender \
   -configuration "$CONFIGURATION" \
@@ -22,6 +29,7 @@ xcodebuild \
   CODE_SIGN_IDENTITY="" \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGNING_ALLOWED=NO \
+  "${ARCH_SETTINGS[@]}" \
   build
 
 mkdir -p "$DEST_DIR"
