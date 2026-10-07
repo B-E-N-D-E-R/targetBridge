@@ -102,9 +102,7 @@ final class TBDisplaySenderStatusItemController: NSObject {
         sliderTargets.removeAll()
         toggleRows.removeAll()
 
-        let titleItem = NSMenuItem(title: "TargetBridge", action: nil, keyEquivalent: "")
-        titleItem.isEnabled = false
-        menu.addItem(titleItem)
+        menu.addItem(NSMenuItem.sectionHeader(title: "TargetBridge"))
 
         let statusItem = NSMenuItem(title: service.summaryStatusText(), action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
@@ -118,9 +116,7 @@ final class TBDisplaySenderStatusItemController: NSObject {
             menu.addItem(.separator())
             for session in connectedSessions {
                 if connectedSessions.count > 1 {
-                    let header = NSMenuItem(title: service.sessionTitle(for: session), action: nil, keyEquivalent: "")
-                    header.isEnabled = false
-                    menu.addItem(header)
+                    menu.addItem(NSMenuItem.sectionHeader(title: service.sessionTitle(for: session)))
                 }
                 menu.addItem(makeSliderItem(symbol: "sun.min.fill",
                                             trailingSymbol: "sun.max.fill",

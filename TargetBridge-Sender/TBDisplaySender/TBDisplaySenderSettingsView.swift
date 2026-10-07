@@ -5,137 +5,53 @@ import UniformTypeIdentifiers
 struct TBDisplaySenderSettingsView: View {
     @ObservedObject var service: TBDisplaySenderService
     @State private var importError: String?
+    @State private var selectedTab: SettingsTab = .general
+
+    private enum SettingsTab: Hashable {
+        case general
+        case addons
+        case about
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                SurfaceCard {
-                    HStack(alignment: .top, spacing: 16) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.green.opacity(0.30),
-                                            Color.cyan.opacity(0.16)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 24, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.95))
-                        }
-                        .frame(width: 68, height: 68)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(settingsTitle)
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                            Text(settingsSubtitle)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            versionChip
-                        }
-
-                        Spacer()
-                    }
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                Picker(settingsTitle, selection: $selectedTab) {
+                    Text(generalTitle).tag(SettingsTab.general)
+                    Text(addonsTitle).tag(SettingsTab.addons)
+                    Text(aboutTitle).tag(SettingsTab.about)
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
 
-                settingsSection(title: generalTitle) {
-                    Picker(TBDisplaySenderL10n.languageGroup(service.language), selection: $service.language) {
-                        ForEach(TBDisplaySenderLanguage.allCases) { language in
-                            Text(language.pickerTitle).tag(language)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                settingsSection(title: interfaceTitle) {
-                    Toggle(TBDisplaySenderL10n.showMenuBarIcon(service.language), isOn: $service.showsMenuBarIcon)
-                    Toggle(TBDisplaySenderL10n.largeCursor(service.language), isOn: $service.largeCursor)
-                        .disabled(service.anyConnected)
-                    Toggle(TBDisplaySenderL10n.preventDisplaySleep(service.language), isOn: $service.preventDisplaySleep)
-                    Toggle(TBDisplaySenderL10n.autoRestartOnWake(service.language), isOn: $service.autoRestartOnWake)
-                    Toggle(TBDisplaySenderL10n.verboseDisplayLogging(service.language), isOn: $service.verboseDisplayLogging)
-                }
-
-                settingsSection(title: behaviorTitle) {
-                    Text(TBDisplaySenderL10n.settingsHint(service.language))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text(TBDisplaySenderL10n.modeLine3(service.language))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text(TBDisplaySenderL10n.modeLine5(service.language))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                settingsSection(title: addonsTitle) {
-                    Text(addonsSubtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if service.anyConnected {
-                        Text(addonsConnectedHint)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 12) {
-                        Button(importAddonTitle) {
-                            importAddonManifest()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button(refreshAddonsTitle) {
-                            service.refreshAddons()
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button(openAddonsFolderTitle) {
-                            service.openAddonsFolder()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    if service.addons.isEmpty {
-                        Text(noAddonsTitle)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(service.addons) { addon in
-                                addonCard(addon)
-                            }
-                        }
-                    }
-                }
-
-                settingsSection(title: aboutTitle) {
-                    Text(aboutBody)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 12) {
-                        Link(destination: URL(string: "https://github.com/swellweb/targetBridge")!) {
-                            Label(githubTitle, systemImage: "link")
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Link(destination: URL(string: "https://github.com/swellweb/targetBridge/releases/latest")!) {
-                            Label(releaseTitle, systemImage: "shippingbox")
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
+                Text(settingsSubtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .padding(20)
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .padding(.bottom, 6)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    switch selectedTab {
+                    case .general:
+                        generalSection
+                        interfaceSection
+                        behaviorSection
+                    case .addons:
+                        addonsSection
+                    case .about:
+                        aboutSection
+                    }
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
         }
-        .background(appBackground)
+        .navigationTitle(settingsTitle)
         .alert(addonImportErrorTitle, isPresented: Binding(
             get: { importError != nil },
             set: { if !$0 { importError = nil } }
@@ -148,16 +64,133 @@ struct TBDisplaySenderSettingsView: View {
         }
     }
 
-    private func settingsSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(title.uppercased())
-                    .font(.system(.caption, design: .rounded, weight: .bold))
-                    .tracking(1.0)
+    private var generalSection: some View {
+        settingsSection(title: generalTitle) {
+            Picker(TBDisplaySenderL10n.languageGroup(service.language), selection: $service.language) {
+                ForEach(TBDisplaySenderLanguage.allCases) { language in
+                    Text(language.pickerTitle).tag(language)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var interfaceSection: some View {
+        TBGroupedSection(title: interfaceTitle) {
+            toggleRow(TBDisplaySenderL10n.showMenuBarIcon(service.language), isOn: $service.showsMenuBarIcon)
+            Divider().padding(.leading, 14)
+            toggleRow(TBDisplaySenderL10n.largeCursor(service.language), isOn: $service.largeCursor)
+                .disabled(service.anyConnected)
+            Divider().padding(.leading, 14)
+            toggleRow(TBDisplaySenderL10n.preventDisplaySleep(service.language), isOn: $service.preventDisplaySleep)
+            Divider().padding(.leading, 14)
+            toggleRow(TBDisplaySenderL10n.autoRestartOnWake(service.language), isOn: $service.autoRestartOnWake)
+            Divider().padding(.leading, 14)
+            toggleRow(TBDisplaySenderL10n.verboseDisplayLogging(service.language), isOn: $service.verboseDisplayLogging)
+        }
+    }
+
+    private var behaviorSection: some View {
+        settingsSection(title: behaviorTitle) {
+            Text(TBDisplaySenderL10n.settingsHint(service.language))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text(TBDisplaySenderL10n.modeLine3(service.language))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text(TBDisplaySenderL10n.modeLine5(service.language))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var addonsSection: some View {
+        settingsSection(title: addonsTitle) {
+            Text(addonsSubtitle)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if service.anyConnected {
+                Text(addonsConnectedHint)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
-                content()
+            }
+
+            HStack(spacing: 10) {
+                Button(importAddonTitle) {
+                    importAddonManifest()
+                }
+                .tbButtonStyle(prominent: true)
+
+                Button(refreshAddonsTitle) {
+                    service.refreshAddons()
+                }
+                .tbButtonStyle()
+
+                Button(openAddonsFolderTitle) {
+                    service.openAddonsFolder()
+                }
+                .tbButtonStyle()
+            }
+
+            if service.addons.isEmpty {
+                Text(noAddonsTitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(service.addons) { addon in
+                        addonCard(addon)
+                    }
+                }
             }
         }
+    }
+
+    private var aboutSection: some View {
+        settingsSection(title: aboutTitle) {
+            Text(aboutBody)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            versionChip
+
+            HStack(spacing: 10) {
+                Link(destination: URL(string: "https://github.com/swellweb/targetBridge")!) {
+                    Label(githubTitle, systemImage: "link")
+                }
+                .tbButtonStyle(prominent: true)
+
+                Link(destination: URL(string: "https://github.com/swellweb/targetBridge/releases/latest")!) {
+                    Label(releaseTitle, systemImage: "shippingbox")
+                }
+                .tbButtonStyle()
+            }
+        }
+    }
+
+    private func settingsSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        TBGroupedSection(title: title) {
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .padding(14)
+        }
+    }
+
+    private func toggleRow(_ title: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+            Spacer(minLength: 12)
+            Toggle(title, isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
     }
 
     private var versionChip: some View {
@@ -168,7 +201,7 @@ struct TBDisplaySenderSettingsView: View {
             .padding(.vertical, 6)
             .background(
                 Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(.quinary)
             )
     }
 
@@ -256,18 +289,6 @@ struct TBDisplaySenderSettingsView: View {
         } catch {
             importError = error.localizedDescription
         }
-    }
-
-    private var appBackground: some View {
-        LinearGradient(
-            colors: [
-                Color(red: 0.12, green: 0.13, blue: 0.14),
-                Color(red: 0.08, green: 0.09, blue: 0.10)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
     }
 
     private var settingsTitle: String {
